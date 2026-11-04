@@ -33,4 +33,4 @@ Grant Full Disk Access in System Settings for complete results.
 
 ## License
 
-MIT
+[MIT](LICENSE). Space Grotesk is licensed under the [SIL Open Font License](assets/fonts/OFL.txt).
