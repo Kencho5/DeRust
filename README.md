@@ -29,6 +29,8 @@ cargo build --release
 ./target/release/derust
 ```
 
+To build a universal `derust.app` with a `.dmg`, run `./scripts/bundle.sh`.
+
 Grant Full Disk Access in System Settings for complete results.
 
 ## License
