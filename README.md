@@ -1,6 +1,6 @@
 # derust
 
-A fast, free and open source Mac cleaner written in Rust.
+A fast, free and open source alternative to CleanMyMac, written in Rust.
 
 ![derust](docs/screenshot.png)
 
