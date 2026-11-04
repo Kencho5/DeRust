@@ -1,21 +1,23 @@
-use iced::widget::{row, space, text};
-use iced::{Center, Element, Fill, Task};
+use iced::widget::{button, container, row, space, text};
+use iced::{Center, Element, Fill, FillPortion, Task};
 use lucide_icons::Icon;
 
 use crate::format;
 use crate::recycle::Cleanup;
-use crate::scan::junk::{self, Category, Report};
+use crate::scan::junk::{self, Category, Entry, Report};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
 use crate::ui::style::{self, Tone};
-use crate::ui::{self, Summary};
+use crate::ui::{self, COLUMN_GAP, SHARE_WIDTH, SIZE_WIDTH, Summary};
 
+const FILES_WIDTH: f32 = 100.0;
 const TITLE: &str = "System Junk";
 const SUBTITLE: &str = "Caches, logs and build files that apps recreate when needed.";
 
 #[derive(Debug, Default)]
 pub struct Junk {
     state: State,
+    focus: Option<Category>,
     cleanup: Option<Cleanup>,
     performance: Option<Snapshot>,
 }
@@ -38,6 +40,7 @@ pub enum Message {
     Scanning(Update<Report>),
     Toggle(Category, bool),
     SelectAll(bool),
+    Focus(Category),
     Clean,
     Cleaned(Cleanup),
 }
@@ -60,7 +63,7 @@ impl Junk {
                 let selected = report
                     .entries
                     .iter()
-                    .filter(|entry| entry.usage.bytes > 0)
+                    .filter(|entry| entry.usage.bytes > 0 && entry.category.selected_by_default())
                     .map(|entry| entry.category)
                     .collect();
 
@@ -75,6 +78,7 @@ impl Junk {
                     }
                 }
             }
+            Message::Focus(category) => self.focus = Some(category),
             Message::SelectAll(checked) => {
                 if let State::Done { report, selected } = &mut self.state {
                     selected.clear();
@@ -84,12 +88,12 @@ impl Junk {
                 }
             }
             Message::Clean => {
-                if let State::Done { selected, .. } = &self.state {
-                    let categories = selected.clone();
+                if let State::Done { report, selected } = &self.state {
+                    let paths = report.paths(selected);
                     self.state = State::Cleaning;
 
                     return Task::perform(
-                        background(move || junk::clean(&categories)),
+                        background(move || junk::clean(&paths)),
                         Message::Cleaned,
                     );
                 }
@@ -152,7 +156,7 @@ impl Junk {
                 "This only takes a moment.",
                 space().into(),
             )],
-            State::Done { report, selected } => results(report, selected, self.cleanup),
+            State::Done { report, selected } => results(report, selected, self.focus, self.cleanup),
         };
 
         let actions = rescan.map(|rescan| ui::with_metrics(self.performance, rescan));
@@ -164,6 +168,7 @@ impl Junk {
 fn results<'a>(
     report: &'a Report,
     selected: &'a [Category],
+    focus: Option<Category>,
     cleanup: Option<Cleanup>,
 ) -> Vec<Element<'a, Message>> {
     let total = report.total();
@@ -200,29 +205,50 @@ fn results<'a>(
 
     let head = row![
         ui::check(all, Some(Message::SelectAll)),
-        ui::heading("Name", Fill, false),
-        ui::heading("Files", 120, true),
-        ui::heading("Size", 120, true),
+        ui::heading("Size", SIZE_WIDTH, true),
+        space().width(COLUMN_GAP),
+        ui::heading("Share", SHARE_WIDTH, false),
+        space().width(COLUMN_GAP),
+        ui::heading("Location", Fill, false),
+        ui::heading("Files", FILES_WIDTH, true),
     ];
+
+    let focused = focus
+        .and_then(|category| {
+            report
+                .entries
+                .iter()
+                .find(|entry| entry.category == category)
+        })
+        .or_else(|| report.entries.first());
 
     let rows = report.entries.iter().map(|entry| {
         let category = entry.category;
+        let is_focused = focused.is_some_and(|focused| focused.category == category);
 
-        row![
+        let content = row![
             ui::check(
                 selected.contains(&category),
                 Some(move |checked| Message::Toggle(category, checked)),
             ),
+            ui::size(entry.usage.bytes),
+            space().width(COLUMN_GAP),
+            ui::share(entry.usage.bytes, total.bytes),
+            space().width(COLUMN_GAP),
             row![ui::dot(Some(tone(category))), ui::name(category.title())]
                 .spacing(10)
                 .align_y(Center)
                 .width(Fill),
-            ui::value(format::count(entry.usage.files), 120),
-            ui::value(format::bytes(entry.usage.bytes), 120),
+            ui::value(format::count(entry.usage.files), FILES_WIDTH),
         ]
-        .align_y(Center)
-        .padding([10, 16])
-        .into()
+        .align_y(Center);
+
+        button(content)
+            .padding([10, 16])
+            .width(Fill)
+            .style(style::row(is_focused))
+            .on_press(Message::Focus(category))
+            .into()
     });
 
     let footer = row![
@@ -239,13 +265,65 @@ fn results<'a>(
     ]
     .align_y(Center);
 
-    vec![ui::table(header.into(), head.into(), rows, footer.into())]
+    let table = ui::table(header.into(), head.into(), rows, footer.into());
+
+    vec![
+        row![
+            container(table).width(FillPortion(3)),
+            container(details(focused)).width(FillPortion(2)),
+        ]
+        .spacing(16)
+        .height(Fill)
+        .into(),
+    ]
+}
+
+fn details(entry: Option<&Entry>) -> Element<'_, Message> {
+    let Some(entry) = entry else {
+        return ui::panel("Nothing found", String::new(), []);
+    };
+
+    let category = entry.category;
+    let caption = format!(
+        "{}  ·  {}  ·  {} files",
+        category.location(),
+        format::bytes(entry.usage.bytes),
+        format::count(entry.usage.files)
+    );
+
+    let mut body = vec![
+        text(category.description())
+            .size(13)
+            .style(style::muted)
+            .into(),
+        space().height(12).into(),
+        ui::label("Largest items"),
+        space().height(4).into(),
+    ];
+
+    if entry.targets.is_empty() {
+        body.push(
+            text("Nothing to clean here.")
+                .size(13)
+                .style(style::muted)
+                .into(),
+        );
+    } else {
+        body.extend(
+            entry
+                .largest()
+                .map(|target| ui::detail(target.bytes, target.name.as_str())),
+        );
+    }
+
+    ui::panel(category.title(), caption, body)
 }
 
 fn tone(category: Category) -> Tone {
-    match category {
-        Category::UserCaches => Tone::Orange,
-        Category::UserLogs => Tone::Blue,
-        Category::XcodeDerivedData => Tone::Green,
-    }
+    let index = Category::ALL
+        .iter()
+        .position(|&candidate| candidate == category)
+        .unwrap_or_default();
+
+    Tone::Palette(index)
 }

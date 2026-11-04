@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,8 +15,14 @@ pub struct InstalledApp {
     pub name: String,
     pub path: PathBuf,
     pub bytes: u64,
-    pub leftovers: Vec<PathBuf>,
+    pub leftovers: Vec<Leftover>,
     pub leftover_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Leftover {
+    pub path: PathBuf,
+    pub bytes: u64,
 }
 
 impl InstalledApp {
@@ -24,7 +31,7 @@ impl InstalledApp {
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
-        std::iter::once(&self.path).chain(&self.leftovers)
+        std::iter::once(&self.path).chain(self.leftovers.iter().map(|leftover| &leftover.path))
     }
 }
 
@@ -95,11 +102,16 @@ fn inspect(
         names.push(bundle_name);
     }
 
-    let leftovers = leftovers(library, group_containers, bundle_id, &names);
-    let leftover_bytes = leftovers
-        .par_iter()
-        .map(|path| scan::disk_usage(path, progress).bytes)
-        .sum();
+    let mut leftovers: Vec<Leftover> = leftovers(library, group_containers, bundle_id, &names)
+        .into_par_iter()
+        .map(|path| Leftover {
+            bytes: scan::disk_usage(&path, progress).bytes,
+            path,
+        })
+        .collect();
+    leftovers.sort_unstable_by_key(|leftover| Reverse(leftover.bytes));
+
+    let leftover_bytes = leftovers.iter().map(|leftover| leftover.bytes).sum();
 
     Some(InstalledApp {
         bytes: scan::disk_usage(bundle, progress).bytes,

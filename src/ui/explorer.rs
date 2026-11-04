@@ -19,14 +19,11 @@ use crate::scan::explorer::{self, FileKind, Kind, Node, Tree};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
 use crate::ui::treemap::{self, Tile, Treemap};
-use crate::ui::{self, Sort, Summary, style};
+use crate::ui::{self, COLUMN_GAP, SHARE_WIDTH, SIZE_WIDTH, Sort, Summary, style};
 
 const TITLE: &str = "Disk Explorer";
 const SUBTITLE: &str = "Browse your disk by size and pick what to remove.";
 const VISIBLE_ROWS: usize = 300;
-const SIZE_WIDTH: f32 = 88.0;
-const SHARE_WIDTH: f32 = 96.0;
-const COLUMN_GAP: f32 = 16.0;
 const TREEMAP_TILES: usize = 60;
 const PREVIEW_PARTS: usize = 24;
 const CRUMB_CHARS: usize = 18;

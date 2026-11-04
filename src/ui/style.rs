@@ -79,7 +79,7 @@ pub enum Tone {
     Neutral,
     Orange,
     Blue,
-    Green,
+    Palette(usize),
 }
 
 impl Tone {
@@ -88,7 +88,7 @@ impl Tone {
             Tone::Neutral => MUTED,
             Tone::Orange => ACCENT,
             Tone::Blue => BLUE,
-            Tone::Green => GREEN,
+            Tone::Palette(index) => PALETTE[index % PALETTE.len()],
         }
     }
 }

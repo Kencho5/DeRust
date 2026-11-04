@@ -6,6 +6,7 @@ pub mod treemap;
 pub mod uninstaller;
 
 use std::borrow::Cow;
+use std::path::Path;
 
 use iced::alignment::Horizontal;
 use iced::widget::text::{IntoFragment, Wrapping};
@@ -21,8 +22,12 @@ use crate::scan::progress::Snapshot;
 use style::Tone;
 
 pub const CHECK_WIDTH: f32 = 28.0;
+pub const SIZE_WIDTH: f32 = 88.0;
+pub const SHARE_WIDTH: f32 = 96.0;
+pub const COLUMN_GAP: f32 = 16.0;
 
 const MAX_NAME_CHARS: usize = 64;
+const DETAIL_SIZE_WIDTH: f32 = 72.0;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Sort<Key> {
@@ -316,6 +321,103 @@ pub fn truncate(name: Cow<'_, str>, max_chars: usize) -> Cow<'_, str> {
         Some((end, _)) => Cow::Owned(format!("{}…", &name[..end])),
         None => name,
     }
+}
+
+pub fn panel<'a, Message: 'a>(
+    title: impl IntoFragment<'a>,
+    caption: String,
+    body: impl IntoIterator<Item = Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let header = column![
+        text(title)
+            .size(16)
+            .font(style::SEMIBOLD)
+            .style(style::strong)
+            .wrapping(Wrapping::None),
+        text(caption).size(13).style(style::muted),
+    ]
+    .spacing(4);
+
+    container(
+        column![
+            header,
+            separator(),
+            scrollable(Column::with_children(body).spacing(2)).height(Fill)
+        ]
+        .spacing(16),
+    )
+    .padding(20)
+    .width(Fill)
+    .height(Fill)
+    .clip(true)
+    .style(style::card)
+    .into()
+}
+
+pub fn detail<'a, Message: 'a>(bytes: u64, name: impl Into<Cow<'a, str>>) -> Element<'a, Message> {
+    row![
+        container(
+            text(format::bytes(bytes))
+                .size(13)
+                .font(style::MEDIUM)
+                .style(style::strong),
+        )
+        .width(DETAIL_SIZE_WIDTH)
+        .align_x(Horizontal::Right),
+        container(
+            text(truncate(name.into(), MAX_NAME_CHARS))
+                .size(13)
+                .style(style::muted)
+                .wrapping(Wrapping::None),
+        )
+        .width(Fill)
+        .clip(true),
+    ]
+    .spacing(14)
+    .align_y(Center)
+    .padding([6, 0])
+    .into()
+}
+
+pub fn label<'a, Message: 'a>(label: &'static str) -> Element<'a, Message> {
+    text(label)
+        .size(12)
+        .font(style::MEDIUM)
+        .style(style::muted)
+        .into()
+}
+
+pub fn home_relative(path: &Path) -> String {
+    match dirs::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
+        Some(relative) => format!("~/{}", relative.display()),
+        None => path.display().to_string(),
+    }
+}
+
+pub fn size<'a, Message: 'a>(bytes: u64) -> Element<'a, Message> {
+    container(
+        text(format::bytes(bytes))
+            .size(14)
+            .font(style::MEDIUM)
+            .style(style::strong),
+    )
+    .width(SIZE_WIDTH)
+    .align_x(Horizontal::Right)
+    .into()
+}
+
+pub fn share<'a, Message: 'a>(bytes: u64, total: u64) -> Element<'a, Message> {
+    let share = if total == 0 {
+        0.0
+    } else {
+        bytes as f32 / total as f32
+    };
+
+    progress_bar(0.0..=1.0, share)
+        .length(SHARE_WIDTH)
+        .girth(4)
+        .style(style::share)
+        .into()
 }
 
 pub fn separator<'a, Message: 'a>() -> Element<'a, Message> {
