@@ -4,8 +4,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
-use trash::TrashContext;
-use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+use crate::recycle::{self, Cleanup};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -75,19 +75,10 @@ impl Report {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Cleanup {
-    pub trashed: u64,
-    pub failed: u64,
-}
-
 pub fn clean(categories: &[Category]) -> Cleanup {
     let Some(home) = dirs::home_dir() else {
         return Cleanup::default();
     };
-
-    let mut trash = TrashContext::new();
-    trash.set_delete_method(DeleteMethod::NsFileManager);
 
     let paths: Vec<PathBuf> = categories
         .iter()
@@ -95,15 +86,7 @@ pub fn clean(categories: &[Category]) -> Cleanup {
         .flat_map(|entries| entries.flatten().map(|entry| entry.path()))
         .collect();
 
-    let trashed = paths
-        .par_iter()
-        .filter(|path| trash.delete(path).is_ok())
-        .count() as u64;
-
-    Cleanup {
-        trashed,
-        failed: paths.len() as u64 - trashed,
-    }
+    recycle::move_to_trash(&paths)
 }
 
 pub fn scan() -> Report {

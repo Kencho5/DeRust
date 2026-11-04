@@ -1,7 +1,10 @@
 mod app;
 mod format;
-mod junk;
+mod recycle;
+mod scan;
 mod section;
+mod task;
+mod ui;
 
 use app::App;
 
