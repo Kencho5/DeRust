@@ -2,5 +2,22 @@
 name = "derust"
 version = "0.1.0"
 edition = "2024"
+description = "A fast, open source Mac cleaner"
+license = "MIT"
+repository = "https://github.com/Kencho5/derust"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = true
 
 [dependencies]
+iced = "0.14.0"
