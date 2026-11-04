@@ -1,6 +1,10 @@
-# derust
+<p align="center">
+  <img src="assets/icon.png" width="128" alt="derust icon">
+</p>
 
-A fast, free and open source alternative to CleanMyMac, written in Rust.
+<h1 align="center">derust</h1>
+
+<p align="center">A fast, free and open source alternative to CleanMyMac, written in Rust.</p>
 
 ![derust](docs/screenshot.png)
 

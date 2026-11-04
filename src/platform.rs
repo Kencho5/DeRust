@@ -9,14 +9,15 @@ use iced::window::raw_window_handle::RawWindowHandle;
 use objc2::rc::autoreleasepool;
 use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
-    NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace, NSGraphicsContext, NSImage,
-    NSToolbar, NSView, NSWindowToolbarStyle, NSWorkspace,
+    NSApplication, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace,
+    NSGraphicsContext, NSImage, NSToolbar, NSView, NSWindowToolbarStyle, NSWorkspace,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSData, NSPoint, NSRect, NSSize, NSString};
 
 const OPEN_FILES: libc::rlim_t = 10_240;
 const MAX_SCAN_THREADS: usize = 8;
 const ICON_PIXELS: usize = 64;
+const APP_ICON: &[u8] = include_bytes!("../assets/icon.png");
 
 pub type FileIcon = Handle;
 
@@ -183,4 +184,15 @@ pub fn unify_titlebar(window: &dyn Window) {
     let toolbar = NSToolbar::new(main_thread);
     window.setToolbar(Some(&toolbar));
     window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+
+    set_dock_icon(main_thread);
+}
+
+fn set_dock_icon(main_thread: MainThreadMarker) {
+    let data = NSData::with_bytes(APP_ICON);
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        return;
+    };
+
+    unsafe { NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&image)) };
 }
