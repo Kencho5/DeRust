@@ -1,11 +1,13 @@
 use std::thread;
 
 use iced::futures::channel::oneshot;
-use iced::widget::{Column, button, center, column, container, row, text};
+use iced::widget::{
+    Column, button, center, checkbox, column, container, row, scrollable, space, text,
+};
 use iced::{Center, Element, Fill, Task};
 
 use crate::format;
-use crate::junk::{self, Report};
+use crate::junk::{self, Category, Report};
 use crate::section::Section;
 
 #[derive(Debug, Default)]
@@ -19,7 +21,10 @@ enum Scan {
     #[default]
     Idle,
     Running,
-    Done(Report),
+    Done {
+        report: Report,
+        selected: Vec<Category>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +32,7 @@ pub enum Message {
     Select(Section),
     Scan,
     Scanned(Report),
+    Toggle(Category, bool),
 }
 
 impl App {
@@ -43,7 +49,25 @@ impl App {
                 self.scan = Scan::Running;
                 return Task::perform(background(junk::scan), Message::Scanned);
             }
-            Message::Scanned(report) => self.scan = Scan::Done(report),
+            Message::Scanned(report) => {
+                let selected = report
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.usage.bytes > 0)
+                    .map(|entry| entry.category)
+                    .collect();
+
+                self.scan = Scan::Done { report, selected };
+            }
+            Message::Toggle(category, checked) => {
+                if let Scan::Done { selected, .. } = &mut self.scan {
+                    if checked {
+                        selected.push(category);
+                    } else {
+                        selected.retain(|&c| c != category);
+                    }
+                }
+            }
         }
 
         Task::none()
@@ -85,30 +109,76 @@ impl App {
     }
 
     fn system_junk(&self) -> Element<'_, Message> {
-        let status = match &self.scan {
-            Scan::Idle => text("Find caches, logs and build files you no longer need."),
-            Scan::Running => text("Scanning..."),
-            Scan::Done(report) => {
-                let total = report.total();
-                text(format!(
-                    "Found {} in {} files",
-                    format::bytes(total.bytes),
-                    total.files
-                ))
-            }
-        };
-
-        let scan = button(text("Scan"))
-            .padding([10, 24])
-            .on_press_maybe((!matches!(self.scan, Scan::Running)).then_some(Message::Scan));
-
-        center(
-            column![text("System Junk").size(28), status, scan]
-                .spacing(16)
-                .align_x(Center),
-        )
-        .into()
+        match &self.scan {
+            Scan::Idle => scan_prompt(
+                "Find caches, logs and build files you no longer need.",
+                Some(Message::Scan),
+            ),
+            Scan::Running => scan_prompt("Scanning...", None),
+            Scan::Done { report, selected } => results(report, selected),
+        }
     }
+}
+
+fn scan_prompt<'a>(status: &'static str, on_scan: Option<Message>) -> Element<'a, Message> {
+    let scan = button(text("Scan"))
+        .padding([10, 24])
+        .on_press_maybe(on_scan);
+
+    center(
+        column![text("System Junk").size(28), text(status), scan]
+            .spacing(16)
+            .align_x(Center),
+    )
+    .into()
+}
+
+fn results<'a>(report: &'a Report, selected: &'a [Category]) -> Element<'a, Message> {
+    let total = report.total();
+
+    let selected_bytes: u64 = report
+        .entries
+        .iter()
+        .filter(|entry| selected.contains(&entry.category))
+        .map(|entry| entry.usage.bytes)
+        .sum();
+
+    let rows = report.entries.iter().map(|entry| {
+        let category = entry.category;
+
+        row![
+            checkbox(selected.contains(&category))
+                .label(category.title())
+                .on_toggle(move |checked| Message::Toggle(category, checked)),
+            space().width(Fill),
+            text(format::bytes(entry.usage.bytes)),
+        ]
+        .align_y(Center)
+        .into()
+    });
+
+    let footer = row![
+        text(format!("{} selected", format::bytes(selected_bytes))),
+        space().width(Fill),
+        button(text("Rescan"))
+            .padding([10, 24])
+            .on_press(Message::Scan),
+    ]
+    .align_y(Center);
+
+    column![
+        text("System Junk").size(28),
+        text(format!(
+            "Found {} in {} files",
+            format::bytes(total.bytes),
+            total.files
+        )),
+        scrollable(Column::with_children(rows).spacing(12)).height(Fill),
+        footer,
+    ]
+    .spacing(16)
+    .padding(24)
+    .into()
 }
 
 fn background<T, F>(job: F) -> impl Future<Output = T>
