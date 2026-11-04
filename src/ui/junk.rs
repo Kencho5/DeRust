@@ -8,7 +8,7 @@ use crate::scan::junk::{self, Category, Report};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
 use crate::ui::style::{self, Tone};
-use crate::ui::{self, CHECK_WIDTH, Summary};
+use crate::ui::{self, Summary};
 
 const TITLE: &str = "System Junk";
 const SUBTITLE: &str = "Caches, logs and build files that apps recreate when needed.";
@@ -37,6 +37,7 @@ pub enum Message {
     Scan,
     Scanning(Update<Report>),
     Toggle(Category, bool),
+    SelectAll(bool),
     Clean,
     Cleaned(Cleanup),
 }
@@ -71,6 +72,14 @@ impl Junk {
                         selected.push(category);
                     } else {
                         selected.retain(|&c| c != category);
+                    }
+                }
+            }
+            Message::SelectAll(checked) => {
+                if let State::Done { report, selected } = &mut self.state {
+                    selected.clear();
+                    if checked {
+                        selected.extend(report.entries.iter().map(|entry| entry.category));
                     }
                 }
             }
@@ -124,7 +133,7 @@ impl Junk {
             )
         });
 
-        let mut body = match &self.state {
+        let body = match &self.state {
             State::Idle => vec![ui::empty(
                 Icon::Brush,
                 "No scan yet",
@@ -146,11 +155,9 @@ impl Junk {
             State::Done { report, selected } => results(report, selected, self.cleanup),
         };
 
-        if let (State::Done { .. }, Some(snapshot)) = (&self.state, self.performance) {
-            body.insert(0, ui::performance(snapshot));
-        }
+        let actions = rescan.map(|rescan| ui::with_metrics(self.performance, rescan));
 
-        ui::page(TITLE, SUBTITLE, rescan, body)
+        ui::page(TITLE, SUBTITLE, actions, body)
     }
 }
 
@@ -189,8 +196,10 @@ fn results<'a>(
         ))
         .padding(16);
 
+    let all = !report.entries.is_empty() && selected.len() == report.entries.len();
+
     let head = row![
-        space().width(CHECK_WIDTH),
+        ui::check(all, Some(Message::SelectAll)),
         ui::heading("Name", Fill, false),
         ui::heading("Files", 120, true),
         ui::heading("Size", 120, true),

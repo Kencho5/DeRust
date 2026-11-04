@@ -58,7 +58,9 @@ impl Names {
 
     pub fn get(&self, index: usize) -> Option<&CStr> {
         let end = *self.ends.get(index)?;
-        let start = index.checked_sub(1).map_or(0, |previous| self.ends[previous]);
+        let start = index
+            .checked_sub(1)
+            .map_or(0, |previous| self.ends[previous]);
         CStr::from_bytes_with_nul(self.bytes.get(start..end)?).ok()
     }
 }
@@ -208,10 +210,12 @@ mod tests {
         std::os::unix::fs::symlink("small.txt", dir.join("link")).unwrap();
 
         let mut found = HashMap::new();
-        Dir::open(&dir).unwrap().read(|entry| {
-            found.insert(entry.name.to_owned(), (entry.kind, entry.allocated));
-        })
-        .unwrap();
+        Dir::open(&dir)
+            .unwrap()
+            .read(|entry| {
+                found.insert(entry.name.to_owned(), (entry.kind, entry.allocated));
+            })
+            .unwrap();
 
         for entry in fs::read_dir(&dir).unwrap().flatten() {
             let metadata = entry.metadata().unwrap();

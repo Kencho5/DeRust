@@ -2,6 +2,7 @@ pub mod explorer;
 pub mod junk;
 pub mod overview;
 pub mod style;
+pub mod treemap;
 pub mod uninstaller;
 
 use std::borrow::Cow;
@@ -149,22 +150,17 @@ pub fn progress<'a, Message: 'a>(label: &'static str, snapshot: Snapshot) -> Ele
         .into()
 }
 
-pub fn performance<'a, Message: 'a>(snapshot: Snapshot) -> Element<'a, Message> {
-    container(
-        row![
-            text("Last scan")
-                .size(14)
-                .font(style::MEDIUM)
-                .style(style::strong),
-            space().width(Fill),
-            metrics(snapshot),
-        ]
-        .align_y(Center),
-    )
-    .padding([12, 16])
-    .width(Fill)
-    .style(style::card)
-    .into()
+pub fn with_metrics<'a, Message: 'a>(
+    snapshot: Option<Snapshot>,
+    action: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let mut actions = row![].spacing(24).align_y(Center);
+
+    if let Some(snapshot) = snapshot {
+        actions = actions.push(metrics(snapshot));
+    }
+
+    actions.push(action).into()
 }
 
 fn metrics<'a, Message: 'a>(snapshot: Snapshot) -> Element<'a, Message> {
@@ -220,13 +216,20 @@ pub fn total<'a, Message: 'a>(
 pub fn segments<'a, Message: 'a>(
     parts: impl IntoIterator<Item = (u64, Option<Tone>)>,
 ) -> Element<'a, Message> {
+    bar(parts, 6.0)
+}
+
+pub fn bar<'a, Message: 'a>(
+    parts: impl IntoIterator<Item = (u64, Option<Tone>)>,
+    height: f32,
+) -> Element<'a, Message> {
     let parts: Vec<(u64, Option<Tone>)> =
         parts.into_iter().filter(|&(bytes, _)| bytes > 0).collect();
     let total: u64 = parts.iter().map(|&(bytes, _)| bytes).sum();
 
     if total == 0 {
         return container(space())
-            .height(6)
+            .height(height)
             .width(Fill)
             .style(style::segment(None))
             .into();
@@ -237,7 +240,7 @@ pub fn segments<'a, Message: 'a>(
 
         container(space())
             .width(Length::FillPortion(portion))
-            .height(6)
+            .height(height)
             .style(style::segment(tone))
             .into()
     }))
@@ -299,7 +302,7 @@ pub fn check<'a, Message: 'a>(
 
 pub fn name<'a, Message: 'a>(name: impl Into<Cow<'a, str>>) -> Element<'a, Message> {
     container(
-        text(truncate(name.into()))
+        text(truncate(name.into(), MAX_NAME_CHARS))
             .size(14)
             .wrapping(Wrapping::None),
     )
@@ -308,8 +311,8 @@ pub fn name<'a, Message: 'a>(name: impl Into<Cow<'a, str>>) -> Element<'a, Messa
     .into()
 }
 
-fn truncate(name: Cow<'_, str>) -> Cow<'_, str> {
-    match name.char_indices().nth(MAX_NAME_CHARS) {
+pub fn truncate(name: Cow<'_, str>, max_chars: usize) -> Cow<'_, str> {
+    match name.char_indices().nth(max_chars) {
         Some((end, _)) => Cow::Owned(format!("{}…", &name[..end])),
         None => name,
     }
@@ -411,12 +414,20 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     icon: Icon,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    button(center(self::icon(icon).size(16)))
-        .width(32)
-        .height(32)
-        .style(style::secondary)
-        .on_press_maybe(on_press)
-        .into()
+    button(
+        self::icon(icon)
+            .size(16)
+            .line_height(1.0)
+            .width(Fill)
+            .height(Fill)
+            .center(),
+    )
+    .padding(0)
+    .width(32)
+    .height(32)
+    .style(style::secondary)
+    .on_press_maybe(on_press)
+    .into()
 }
 
 pub fn selection(count: usize, bytes: u64) -> String {

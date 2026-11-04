@@ -1,12 +1,15 @@
+use std::cmp::Reverse;
 use std::fmt;
 use std::fs;
 use std::mem;
 use std::sync::Arc;
 
 use iced::alignment::Horizontal;
-use iced::widget::text::Wrapping;
-use iced::widget::{Row, button, column, container, pick_list, progress_bar, row, space, text};
-use iced::{Center, Element, Fill, Task};
+use iced::widget::text::{LineHeight, Shaping, Wrapping};
+use iced::widget::{
+    Row, button, canvas, column, container, mouse_area, pick_list, progress_bar, row, space, text,
+};
+use iced::{Center, Color, Element, Fill, FillPortion, Task};
 use lucide_icons::Icon;
 
 use crate::format;
@@ -15,11 +18,19 @@ use crate::scan::disk::Disk;
 use crate::scan::explorer::{self, FileKind, Kind, Node, Tree};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
-use crate::ui::{self, CHECK_WIDTH, Sort, Summary, style};
+use crate::ui::treemap::{self, Tile, Treemap};
+use crate::ui::{self, Sort, Summary, style};
 
 const TITLE: &str = "Disk Explorer";
 const SUBTITLE: &str = "Browse your disk by size and pick what to remove.";
 const VISIBLE_ROWS: usize = 300;
+const SIZE_WIDTH: f32 = 88.0;
+const SHARE_WIDTH: f32 = 96.0;
+const COLUMN_GAP: f32 = 16.0;
+const TREEMAP_TILES: usize = 60;
+const PREVIEW_PARTS: usize = 24;
+const CRUMB_CHARS: usize = 18;
+const LAST_CRUMB_CHARS: usize = 32;
 
 #[derive(Debug, Default)]
 pub struct Explorer {
@@ -50,6 +61,7 @@ struct Browser {
     rows: Vec<Vec<usize>>,
     hidden: usize,
     choices: Vec<Choice>,
+    hovered: Option<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +92,9 @@ pub enum Message {
     Forward,
     Jump(usize),
     Toggle(Vec<usize>, bool),
+    SelectAll(bool),
+    Hover(Option<Vec<usize>>),
+    Unhover(Vec<usize>),
     Filter(Option<FileKind>),
     Sort(SortKey),
     Remove,
@@ -165,7 +180,7 @@ impl Explorer {
             )
         });
 
-        let mut body = match &self.state {
+        let body = match &self.state {
             State::Idle => vec![ui::empty(
                 Icon::HardDrive,
                 "No scan yet",
@@ -187,11 +202,9 @@ impl Explorer {
             State::Done(browser) => browser.view(self.disk, self.cleanup),
         };
 
-        if let (State::Done(_), Some(snapshot)) = (&self.state, self.performance) {
-            body.insert(0, ui::performance(snapshot));
-        }
+        let actions = rescan.map(|rescan| ui::with_metrics(self.performance, rescan));
 
-        ui::page(TITLE, SUBTITLE, rescan, body)
+        ui::page(TITLE, SUBTITLE, actions, body)
     }
 }
 
@@ -211,6 +224,7 @@ impl Browser {
             rows: Vec::new(),
             hidden: 0,
             choices: Vec::new(),
+            hovered: None,
         };
         browser.refresh();
         browser
@@ -238,6 +252,23 @@ impl Browser {
                 if let Some(path) = self.forward.pop() {
                     self.back.push(mem::replace(&mut self.path, path));
                     self.refresh();
+                }
+            }
+            Message::Hover(indices) => self.hovered = indices,
+            Message::Unhover(indices) => {
+                if self.hovered.as_ref() == Some(&indices) {
+                    self.hovered = None;
+                }
+            }
+            Message::SelectAll(checked) => {
+                let targets: Vec<Vec<usize>> = self.selectable().cloned().collect();
+
+                for target in &targets {
+                    self.selected
+                        .retain(|selected| !selected.starts_with(target));
+                }
+                if checked {
+                    self.selected.extend(targets);
                 }
             }
             Message::Toggle(target, checked) => {
@@ -322,6 +353,7 @@ impl Browser {
         self.choices = choices;
         self.rows = rows;
         self.hidden = hidden;
+        self.hovered = None;
     }
 
     fn prune(&mut self) {
@@ -340,6 +372,35 @@ impl Browser {
         self.back.clear();
         self.forward.clear();
         self.refresh();
+    }
+
+    fn selectable(&self) -> impl Iterator<Item = &Vec<usize>> {
+        self.rows.iter().filter(|indices| {
+            self.tree
+                .node
+                .find(indices)
+                .is_some_and(|node| node.kind != Kind::Rest)
+                && self.check_state(indices).1
+        })
+    }
+
+    fn all_state(&self) -> (bool, bool) {
+        let mut selectable = self.selectable().peekable();
+
+        if selectable.peek().is_none() {
+            return (self.covered(), false);
+        }
+
+        (
+            selectable.all(|indices| self.selected.contains(indices)),
+            true,
+        )
+    }
+
+    fn covered(&self) -> bool {
+        self.selected
+            .iter()
+            .any(|selected| self.path.starts_with(selected))
     }
 
     fn check_state(&self, indices: &[usize]) -> (bool, bool) {
@@ -382,9 +443,21 @@ impl Browser {
     fn view(&self, disk: Option<Disk>, cleanup: Option<Cleanup>) -> Vec<Element<'_, Message>> {
         let current = self.current();
         let (selected_count, selected_bytes) = self.selection();
+        let (all, can_select) = self.all_state();
 
         let head = row![
-            space().width(CHECK_WIDTH),
+            ui::check(all, can_select.then_some(Message::SelectAll)),
+            ui::sortable(
+                "Size",
+                SIZE_WIDTH,
+                true,
+                self.sort,
+                SortKey::Size,
+                Message::Sort(SortKey::Size),
+            ),
+            space().width(COLUMN_GAP),
+            ui::heading("Share", SHARE_WIDTH, false),
+            space().width(COLUMN_GAP),
             ui::sortable(
                 "Name",
                 Fill,
@@ -393,17 +466,10 @@ impl Browser {
                 SortKey::Name,
                 Message::Sort(SortKey::Name),
             ),
-            ui::heading("Share", 160, false),
-            ui::sortable(
-                "Size",
-                120,
-                true,
-                self.sort,
-                SortKey::Size,
-                Message::Sort(SortKey::Size),
-            ),
             space().width(28),
         ];
+
+        let tiles = self.tiles();
 
         let mut rows: Vec<Element<'_, Message>> = self
             .rows
@@ -411,13 +477,22 @@ impl Browser {
             .filter_map(|indices| {
                 let node = self.tree.node.find(indices)?;
                 let (checked, enabled) = self.check_state(indices);
+                let color = tiles
+                    .iter()
+                    .position(|tile| tile.indices == indices.as_slice())
+                    .filter(|_| node.kind != Kind::Rest)
+                    .map(treemap::color);
 
                 Some(entry(
                     indices,
                     node,
                     current.bytes,
-                    checked,
-                    enabled,
+                    Look {
+                        checked,
+                        enabled,
+                        highlighted: self.hovered.as_ref() == Some(indices),
+                        color,
+                    },
                     self.location(indices),
                 ))
             })
@@ -461,9 +536,12 @@ impl Browser {
         let footer = row![
             usage,
             space().width(Fill),
-            text(ui::selection(selected_count, selected_bytes))
-                .size(14)
-                .style(style::muted),
+            text(match cleanup {
+                Some(cleanup) if selected_count == 0 => cleanup.summary(),
+                _ => ui::selection(selected_count, selected_bytes),
+            })
+            .size(14)
+            .style(style::muted),
             ui::action(
                 "Move to Trash",
                 Some(Icon::Trash2),
@@ -474,28 +552,63 @@ impl Browser {
         .spacing(16)
         .align_y(Center);
 
-        let description = cleanup.map_or_else(
-            || {
-                format!(
-                    "{}  ·  {} items",
-                    format::bytes(current.bytes),
-                    format::count(current.items)
-                )
-            },
-            Cleanup::summary,
-        );
-
-        vec![ui::table(
-            container(self.toolbar(description))
-                .padding([12, 16])
-                .into(),
+        let table = ui::table(
+            container(self.toolbar()).padding([12, 16]).into(),
             head.into(),
             rows,
             footer.into(),
-        )]
+        );
+
+        vec![
+            row![
+                container(table).width(FillPortion(3)),
+                container(
+                    canvas(Treemap {
+                        tiles,
+                        hovered: self.hovered.as_deref(),
+                    })
+                    .width(Fill)
+                    .height(Fill),
+                )
+                .padding(8)
+                .width(FillPortion(2))
+                .height(Fill)
+                .style(style::card),
+            ]
+            .spacing(16)
+            .height(Fill)
+            .into(),
+        ]
     }
 
-    fn toolbar(&self, description: String) -> Element<'_, Message> {
+    fn tiles(&self) -> Vec<Tile<'_>> {
+        let mut tiles: Vec<Tile<'_>> = self
+            .rows
+            .iter()
+            .filter_map(|indices| {
+                let node = self.tree.node.find(indices)?;
+                (node.bytes > 0).then(|| Tile {
+                    indices,
+                    name: node.name(),
+                    bytes: node.bytes,
+                    kind: node.kind,
+                    parts: node
+                        .children
+                        .iter()
+                        .take(PREVIEW_PARTS)
+                        .map(|child| child.bytes)
+                        .filter(|&bytes| bytes > 0)
+                        .collect(),
+                })
+            })
+            .collect();
+
+        tiles.sort_unstable_by_key(|tile| Reverse(tile.bytes));
+        tiles.truncate(TREEMAP_TILES);
+        tiles
+    }
+
+    fn toolbar(&self) -> Element<'_, Message> {
         let mut crumbs = Row::new().spacing(4).align_y(Center);
         let mut node = &self.tree.node;
 
@@ -508,9 +621,13 @@ impl Browser {
                 crumbs = crumbs.push(ui::icon(Icon::ChevronRight).size(12).style(style::muted));
             }
 
-            let label = text(node.name()).size(14).wrapping(Wrapping::None);
+            let last = depth == self.path.len();
+            let limit = if last { LAST_CRUMB_CHARS } else { CRUMB_CHARS };
+            let label = text(ui::truncate(node.name(), limit))
+                .size(14)
+                .wrapping(Wrapping::None);
 
-            crumbs = if depth == self.path.len() {
+            crumbs = if last {
                 crumbs.push(label.font(style::MEDIUM).style(style::strong))
             } else {
                 crumbs.push(
@@ -532,9 +649,7 @@ impl Browser {
                 (!self.forward.is_empty()).then_some(Message::Forward),
             ),
             space().width(8),
-            crumbs,
-            space().width(Fill),
-            text(description).size(14).style(style::muted),
+            container(crumbs).width(Fill).clip(true),
             space().width(8),
             pick_list(
                 self.choices.as_slice(),
@@ -545,6 +660,13 @@ impl Browser {
             )
             .text_size(14)
             .padding([7, 12])
+            .handle(pick_list::Handle::Static(pick_list::Icon {
+                font: style::ICONS,
+                code_point: Icon::ChevronDown.unicode(),
+                size: Some(11.into()),
+                line_height: LineHeight::default(),
+                shaping: Shaping::Basic,
+            }))
             .style(style::dropdown)
             .menu_style(style::menu),
         ]
@@ -554,18 +676,32 @@ impl Browser {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Look {
+    checked: bool,
+    enabled: bool,
+    highlighted: bool,
+    color: Option<Color>,
+}
+
 fn entry<'a>(
     indices: &[usize],
     node: &'a Node,
     parent_bytes: u64,
-    checked: bool,
-    enabled: bool,
+    look: Look,
     location: Option<String>,
 ) -> Element<'a, Message> {
-    let (icon, icon_style): (Icon, fn(&iced::Theme) -> text::Style) = match node.kind {
-        Kind::Folder => (Icon::Folder, style::accent),
-        Kind::File(_) => (Icon::File, style::muted),
-        Kind::Rest => (Icon::Layers, style::muted),
+    let Look {
+        checked,
+        enabled,
+        highlighted,
+        color,
+    } = look;
+
+    let icon = match node.kind {
+        Kind::Folder => Icon::Folder,
+        Kind::File(_) => Icon::File,
+        Kind::Rest => Icon::Layers,
     };
 
     let toggle = (enabled && node.kind != Kind::Rest).then(|| {
@@ -580,7 +716,7 @@ fn entry<'a>(
     };
 
     let mut label = row![
-        ui::icon(icon).size(16).style(icon_style),
+        ui::icon(icon).size(16).color(color.unwrap_or(style::MUTED)),
         ui::name(node.name())
     ]
     .spacing(10)
@@ -598,15 +734,21 @@ fn entry<'a>(
 
     let content = row![
         ui::check(checked, toggle),
-        container(label).width(Fill).clip(true),
         container(
-            progress_bar(0.0..=1.0, share)
-                .length(120)
-                .girth(4)
-                .style(style::share),
+            text(format::bytes(node.bytes))
+                .size(14)
+                .font(style::MEDIUM)
+                .style(style::strong),
         )
-        .width(160),
-        ui::value(format::bytes(node.bytes), 120),
+        .width(SIZE_WIDTH)
+        .align_x(Horizontal::Right),
+        space().width(COLUMN_GAP),
+        progress_bar(0.0..=1.0, share)
+            .length(SHARE_WIDTH)
+            .girth(4)
+            .style(style::share),
+        space().width(COLUMN_GAP),
+        container(label).width(Fill).clip(true),
         container(if node.kind == Kind::Folder {
             ui::icon(Icon::ChevronRight).size(14).style(style::muted)
         } else {
@@ -617,14 +759,22 @@ fn entry<'a>(
     ]
     .align_y(Center);
 
-    if node.kind == Kind::Folder {
+    let row: Element<'a, Message> = if node.kind == Kind::Folder {
         button(content)
             .padding([10, 16])
             .width(Fill)
-            .style(style::row)
+            .style(style::row(highlighted))
             .on_press(Message::Open(indices.to_vec()))
             .into()
     } else {
-        container(content).padding([10, 16]).into()
-    }
+        container(content)
+            .padding([10, 16])
+            .style(style::highlight(highlighted))
+            .into()
+    };
+
+    mouse_area(row)
+        .on_enter(Message::Hover(Some(indices.to_vec())))
+        .on_exit(Message::Unhover(indices.to_vec()))
+        .into()
 }

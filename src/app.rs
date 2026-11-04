@@ -10,7 +10,8 @@ use crate::ui::overview::{self, Overview};
 use crate::ui::uninstaller::{self, Uninstaller};
 use crate::ui::{self, style};
 
-const TRAFFIC_LIGHTS_WIDTH: f32 = 84.0;
+const TRAFFIC_LIGHTS_END: f32 = 72.0;
+const HEADER_GAP: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 52.0;
 
 #[derive(Debug)]
@@ -142,14 +143,15 @@ impl App {
         }))
         .spacing(4);
 
-        let bar =
-            container(row![brand, space().width(28), tabs, space().width(Fill)].align_y(Center))
-                .padding(Padding {
-                    left: TRAFFIC_LIGHTS_WIDTH,
-                    right: 24.0,
-                    ..Padding::ZERO
-                })
-                .center_y(HEADER_HEIGHT);
+        let bar = container(
+            row![brand, space().width(HEADER_GAP), tabs, space().width(Fill)].align_y(Center),
+        )
+        .padding(Padding {
+            left: TRAFFIC_LIGHTS_END + HEADER_GAP,
+            right: 24.0,
+            ..Padding::ZERO
+        })
+        .center_y(HEADER_HEIGHT);
 
         column![mouse_area(bar).on_press(Message::Drag), ui::separator()].into()
     }

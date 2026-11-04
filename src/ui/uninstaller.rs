@@ -10,7 +10,7 @@ use crate::scan::apps::{self, InstalledApp};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
 use crate::ui::style::{self, Tone};
-use crate::ui::{self, CHECK_WIDTH, Sort, Summary};
+use crate::ui::{self, Sort, Summary};
 
 const TITLE: &str = "Applications";
 const SUBTITLE: &str = "Remove apps along with the files they leave behind.";
@@ -48,6 +48,7 @@ pub enum Message {
     Scan,
     Scanning(Update<Vec<InstalledApp>>),
     Toggle(usize, bool),
+    SelectAll(bool),
     Sort(SortKey),
     Uninstall,
     Uninstalled(Cleanup),
@@ -73,6 +74,11 @@ impl Uninstaller {
             }
             Message::Sort(key) => {
                 self.sort = self.sort.toggle(key, key != SortKey::Name);
+            }
+            Message::SelectAll(checked) => {
+                if let State::Done { selected, .. } = &mut self.state {
+                    selected.fill(checked);
+                }
             }
             Message::Toggle(index, checked) => {
                 if let State::Done { selected, .. } = &mut self.state
@@ -134,7 +140,7 @@ impl Uninstaller {
             )
         });
 
-        let mut body = match &self.state {
+        let body = match &self.state {
             State::Idle => vec![ui::empty(
                 Icon::Package,
                 "No scan yet",
@@ -156,11 +162,9 @@ impl Uninstaller {
             State::Done { apps, selected } => results(apps, selected, self.sort, self.cleanup),
         };
 
-        if let (State::Done { .. }, Some(snapshot)) = (&self.state, self.performance) {
-            body.insert(0, ui::performance(snapshot));
-        }
+        let actions = rescan.map(|rescan| ui::with_metrics(self.performance, rescan));
 
-        ui::page(TITLE, SUBTITLE, rescan, body)
+        ui::page(TITLE, SUBTITLE, actions, body)
     }
 }
 
@@ -212,8 +216,10 @@ fn results<'a>(
         .spacing(8)
         .padding(16);
 
+    let all = !selected.is_empty() && selected.iter().all(|&checked| checked);
+
     let head = row![
-        space().width(CHECK_WIDTH),
+        ui::check(all, Some(Message::SelectAll)),
         ui::sortable(
             "Name",
             Fill,

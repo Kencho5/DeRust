@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use iced::font::Weight;
-use iced::theme::Palette;
 use iced::overlay::menu;
+use iced::theme::Palette;
 use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, text};
 use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, color};
 
@@ -33,12 +33,23 @@ const RAISED: Color = color!(0x1c1c1c);
 const TRACK: Color = color!(0x242424);
 const CONTROL: Color = color!(0x4a4a4a);
 const TEXT: Color = color!(0xe3e3e3);
-const STRONG: Color = color!(0xf2f2f2);
-const MUTED: Color = color!(0x9c9c9c);
-const ACCENT: Color = color!(0xff8d00);
+pub const STRONG: Color = color!(0xf2f2f2);
+pub const MUTED: Color = color!(0x9c9c9c);
+pub const ACCENT: Color = color!(0xff8d00);
 const GREEN: Color = color!(0x5ad694);
-const BLUE: Color = color!(0x68befc);
+pub const BLUE: Color = color!(0x68befc);
 const YELLOW: Color = color!(0xf7c352);
+
+pub const PALETTE: [Color; 8] = [
+    color!(0xff8d00),
+    color!(0x68befc),
+    color!(0xa88cf5),
+    color!(0x5ad694),
+    color!(0xf7c352),
+    color!(0xf58db8),
+    color!(0x4fd1c5),
+    color!(0xf58d7a),
+];
 const RED: Color = color!(0xf58d7a);
 
 fn border() -> Color {
@@ -190,16 +201,22 @@ pub fn nav(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
-pub fn row(_theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Hovered | button::Status::Pressed => Some(RAISED.into()),
-        _ => None,
-    };
+pub fn row(highlighted: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
 
-    button::Style {
-        background,
-        text_color: TEXT,
-        ..button::Style::default()
+        button::Style {
+            background: (highlighted || hovered).then(|| RAISED.into()),
+            text_color: TEXT,
+            ..button::Style::default()
+        }
+    }
+}
+
+pub fn highlight(highlighted: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| container::Style {
+        background: highlighted.then(|| RAISED.into()),
+        ..container::Style::default()
     }
 }
 
