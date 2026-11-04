@@ -12,7 +12,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone)]
 pub enum Update<T> {
     Progress(Snapshot),
-    Finished(T),
+    Finished(T, Snapshot),
 }
 
 pub fn background<T, F>(job: F) -> impl Future<Output = T>
@@ -45,8 +45,9 @@ where
 
             thread::spawn(move || {
                 let result = job(&progress);
+                let finished = progress.snapshot();
                 reporter.unpark();
-                result
+                (result, finished)
             })
         };
 
@@ -55,8 +56,8 @@ where
             thread::park_timeout(PROGRESS_INTERVAL);
         }
 
-        if let Ok(result) = worker.join() {
-            let _ = sender.unbounded_send(Update::Finished(result));
+        if let Ok((result, finished)) = worker.join() {
+            let _ = sender.unbounded_send(Update::Finished(result, finished));
         }
     });
 

@@ -1,4 +1,5 @@
-use iced::{Element, Task};
+use iced::widget::{row, space, text};
+use iced::{Center, Element, Fill, Task};
 use lucide_icons::Icon;
 
 use crate::format;
@@ -6,15 +7,17 @@ use crate::recycle::Cleanup;
 use crate::scan::junk::{self, Category, Report};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
-use crate::ui::{self, style};
+use crate::ui::style::{self, Tone};
+use crate::ui::{self, CHECK_WIDTH, Summary};
 
 const TITLE: &str = "System Junk";
-const ICON: Icon = Icon::Brush;
+const SUBTITLE: &str = "Caches, logs and build files that apps recreate when needed.";
 
 #[derive(Debug, Default)]
 pub struct Junk {
     state: State,
     cleanup: Option<Cleanup>,
+    performance: Option<Snapshot>,
 }
 
 #[derive(Debug, Default)]
@@ -50,7 +53,9 @@ impl Junk {
                     *current = snapshot;
                 }
             }
-            Message::Scanning(Update::Finished(report)) => {
+            Message::Scanning(Update::Finished(report, snapshot)) => {
+                self.performance = Some(snapshot);
+
                 let selected = report
                     .entries
                     .iter()
@@ -94,18 +99,58 @@ impl Junk {
         Task::run(task::with_progress(junk::scan), Message::Scanning)
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn summary(&self) -> Summary {
         match &self.state {
-            State::Idle => ui::prompt(
-                ICON,
-                TITLE,
-                "Find caches, logs and build files you no longer need.",
-                Some(Message::Scan),
-            ),
-            State::Scanning(snapshot) => ui::scanning(ICON, TITLE, "Scanning...", *snapshot),
-            State::Cleaning => ui::prompt(ICON, TITLE, "Moving files to Trash...", None),
-            State::Done { report, selected } => results(report, selected, self.cleanup),
+            State::Idle => Summary::Idle,
+            State::Scanning(snapshot) => Summary::Scanning(*snapshot),
+            State::Cleaning => Summary::Busy,
+            State::Done { report, .. } => {
+                let total = report.total();
+                Summary::Found {
+                    items: total.files,
+                    bytes: total.bytes,
+                }
+            }
         }
+    }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        let rescan = matches!(self.state, State::Done { .. }).then(|| {
+            ui::action(
+                "Rescan",
+                Some(Icon::RotateCw),
+                style::secondary,
+                Some(Message::Scan),
+            )
+        });
+
+        let mut body = match &self.state {
+            State::Idle => vec![ui::empty(
+                Icon::Brush,
+                "No scan yet",
+                "Look through caches, logs and Xcode build data.",
+                ui::action(
+                    "Start scan",
+                    Some(Icon::Play),
+                    style::primary,
+                    Some(Message::Scan),
+                ),
+            )],
+            State::Scanning(snapshot) => vec![ui::progress("Scanning junk locations", *snapshot)],
+            State::Cleaning => vec![ui::empty(
+                Icon::Trash2,
+                "Moving to Trash",
+                "This only takes a moment.",
+                space().into(),
+            )],
+            State::Done { report, selected } => results(report, selected, self.cleanup),
+        };
+
+        if let (State::Done { .. }, Some(snapshot)) = (&self.state, self.performance) {
+            body.insert(0, ui::performance(snapshot));
+        }
+
+        ui::page(TITLE, SUBTITLE, rescan, body)
     }
 }
 
@@ -113,7 +158,7 @@ fn results<'a>(
     report: &'a Report,
     selected: &'a [Category],
     cleanup: Option<Cleanup>,
-) -> Element<'a, Message> {
+) -> Vec<Element<'a, Message>> {
     let total = report.total();
 
     let selected_bytes: u64 = report
@@ -123,41 +168,75 @@ fn results<'a>(
         .map(|entry| entry.usage.bytes)
         .sum();
 
+    let caption = cleanup.map_or_else(
+        || {
+            format!(
+                "{} files across {} locations, all safe to remove",
+                format::count(total.files),
+                report.entries.len()
+            )
+        },
+        Cleanup::summary,
+    );
+
+    let header = ui::total(format::bytes(total.bytes), "of junk", caption)
+        .push(space().height(6))
+        .push(ui::segments(
+            report
+                .entries
+                .iter()
+                .map(|entry| (entry.usage.bytes, Some(tone(entry.category)))),
+        ))
+        .padding(16);
+
+    let head = row![
+        space().width(CHECK_WIDTH),
+        ui::heading("Name", Fill, false),
+        ui::heading("Files", 120, true),
+        ui::heading("Size", 120, true),
+    ];
+
     let rows = report.entries.iter().map(|entry| {
         let category = entry.category;
 
-        ui::item(
-            selected.contains(&category),
-            move |checked| Message::Toggle(category, checked),
-            Icon::Folder,
-            category.title(),
-            format!("{} files", entry.usage.files),
-            entry.usage.bytes,
-        )
+        row![
+            ui::check(
+                selected.contains(&category),
+                Some(move |checked| Message::Toggle(category, checked)),
+            ),
+            row![ui::dot(Some(tone(category))), ui::name(category.title())]
+                .spacing(10)
+                .align_y(Center)
+                .width(Fill),
+            ui::value(format::count(entry.usage.files), 120),
+            ui::value(format::bytes(entry.usage.bytes), 120),
+        ]
+        .align_y(Center)
+        .padding([10, 16])
+        .into()
     });
 
-    let footer = ui::footer(
-        ui::selection(selected.len(), selected_bytes),
-        [
-            ui::action("Start Over", style::ghost, Some(Message::Scan)),
-            ui::action(
-                "Clean Up",
-                style::remove,
-                (!selected.is_empty()).then_some(Message::Clean),
-            ),
-        ],
-    );
-
-    ui::page(
-        ICON,
-        TITLE,
-        format!(
-            "Found {} in {} files",
-            format::bytes(total.bytes),
-            total.files
+    let footer = row![
+        text(ui::selection(selected.len(), selected_bytes))
+            .size(14)
+            .style(style::muted),
+        space().width(Fill),
+        ui::action(
+            "Clean up",
+            Some(Icon::Trash2),
+            style::primary,
+            (!selected.is_empty()).then_some(Message::Clean),
         ),
-        cleanup.map(Cleanup::summary),
-        rows,
-        footer,
-    )
+    ]
+    .align_y(Center);
+
+    vec![ui::table(header.into(), head.into(), rows, footer.into())]
+}
+
+fn tone(category: Category) -> Tone {
+    match category {
+        Category::UserCaches => Tone::Orange,
+        Category::UserLogs => Tone::Blue,
+        Category::XcodeDerivedData => Tone::Green,
+    }
 }

@@ -1,33 +1,54 @@
-use iced::widget::{Column, button, center, column, container, row, text, tooltip};
-use iced::{Center, Element, Fill, Padding, Task, Theme};
+use iced::widget::{Row, button, column, container, mouse_area, row, space, text};
+use iced::{Center, Element, Fill, Padding, Task, Theme, window};
 
+use crate::platform;
+use crate::scan::disk::Disk;
 use crate::section::Section;
+use crate::ui::explorer::{self, Explorer};
 use crate::ui::junk::{self, Junk};
-use crate::ui::large_files::{self, LargeFiles};
+use crate::ui::overview::{self, Overview};
 use crate::ui::uninstaller::{self, Uninstaller};
 use crate::ui::{self, style};
 
-#[derive(Debug, Default)]
+const TRAFFIC_LIGHTS_WIDTH: f32 = 84.0;
+const HEADER_HEIGHT: f32 = 52.0;
+
+#[derive(Debug)]
 pub struct App {
     section: Section,
+    disk: Option<Disk>,
     junk: Junk,
-    large_files: LargeFiles,
+    explorer: Explorer,
     uninstaller: Uninstaller,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Select(Section),
+    Drag,
+    Overview(overview::Message),
     Junk(junk::Message),
-    LargeFiles(large_files::Message),
+    Explorer(explorer::Message),
     Uninstaller(uninstaller::Message),
 }
 
 impl App {
     pub const TITLE: &str = "Derust";
 
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new() -> (Self, Task<Message>) {
+        let app = Self {
+            section: Section::default(),
+            disk: Disk::root(),
+            junk: Junk::default(),
+            explorer: Explorer::default(),
+            uninstaller: Uninstaller::default(),
+        };
+
+        let titlebar = window::oldest()
+            .and_then(|id| window::run(id, platform::unify_titlebar))
+            .discard();
+
+        (app, titlebar)
     }
 
     pub fn theme(&self) -> Theme {
@@ -36,78 +57,100 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Select(section) => {
+            Message::Select(section) | Message::Overview(overview::Message::Open(section)) => {
                 self.section = section;
                 Task::none()
             }
-            Message::Junk(message) => self.junk.update(message).map(Message::Junk),
-            Message::LargeFiles(message) => {
-                self.large_files.update(message).map(Message::LargeFiles)
+            Message::Drag => window::latest().and_then(window::drag),
+            Message::Overview(overview::Message::Scan(section)) => self.scan(section),
+            Message::Overview(overview::Message::ScanAll) => {
+                Task::batch(Section::CLEANUP.map(|section| self.scan(section)))
+            }
+            Message::Junk(message) => {
+                self.disk = Disk::root();
+                self.junk.update(message).map(Message::Junk)
+            }
+            Message::Explorer(message) => {
+                self.disk = Disk::root();
+                self.explorer.update(message).map(Message::Explorer)
             }
             Message::Uninstaller(message) => {
+                self.disk = Disk::root();
                 self.uninstaller.update(message).map(Message::Uninstaller)
             }
         }
     }
 
+    fn scan(&mut self, section: Section) -> Task<Message> {
+        match section {
+            Section::SystemJunk => self.update(Message::Junk(junk::Message::Scan)),
+            Section::Explorer => self.update(Message::Explorer(explorer::Message::Scan)),
+            Section::Uninstaller => self.update(Message::Uninstaller(uninstaller::Message::Scan)),
+            Section::Overview => Task::none(),
+        }
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
-        container(row![self.sidebar(), self.main()])
-            .width(Fill)
-            .height(Fill)
-            .style(style::window)
-            .into()
-    }
-
-    fn sidebar(&self) -> Element<'_, Message> {
-        let items = Section::ALL.into_iter().map(|section| {
-            let tile = button(center(ui::icon(section.icon()).size(24)))
-                .width(56)
-                .height(56)
-                .style(style::nav(section == self.section))
-                .on_press(Message::Select(section));
-
-            let label = container(text(section.title()).size(13))
-                .padding([6, 10])
-                .style(style::tooltip);
-
-            tooltip(tile, label, tooltip::Position::Right).into()
-        });
-
-        container(Column::with_children(items).spacing(12))
-            .width(88)
-            .height(Fill)
-            .align_x(Center)
-            .padding(Padding {
-                top: 56.0,
-                bottom: 16.0,
-                ..Padding::ZERO
-            })
-            .style(style::sidebar)
-            .into()
-    }
-
-    fn main(&self) -> Element<'_, Message> {
-        let title = container(text(self.section.title()).size(15).style(style::subtle))
-            .width(Fill)
-            .center_x(Fill)
-            .center_y(44);
-
         let content = match self.section {
+            Section::Overview => overview::view(Overview {
+                disk: self.disk,
+                junk: self.junk.summary(),
+                explorer: self.explorer.summary(),
+                apps: self.uninstaller.summary(),
+            })
+            .map(Message::Overview),
             Section::SystemJunk => self.junk.view().map(Message::Junk),
-            Section::LargeFiles => self.large_files.view().map(Message::LargeFiles),
+            Section::Explorer => self.explorer.view().map(Message::Explorer),
             Section::Uninstaller => self.uninstaller.view().map(Message::Uninstaller),
-            section => ui::placeholder(section.icon(), section.title()),
         };
 
-        column![
-            title,
-            container(content).padding(Padding {
-                top: 8.0,
-                right: 24.0,
-                bottom: 24.0,
-                left: 24.0,
-            })
-        ]
+        container(column![
+            self.header(),
+            container(content).width(Fill).height(Fill).padding(24),
+        ])
+        .width(Fill)
+        .height(Fill)
+        .style(style::window)
         .into()
+    }
+
+    fn header(&self) -> Element<'_, Message> {
+        let brand = row![
+            text("de")
+                .size(17)
+                .font(style::SEMIBOLD)
+                .style(style::accent),
+            text("rust")
+                .size(17)
+                .font(style::SEMIBOLD)
+                .style(style::strong),
+        ];
+
+        let tabs = Row::with_children(Section::ALL.map(|section| {
+            button(
+                row![
+                    ui::icon(section.icon()).size(14),
+                    text(section.title()).size(14).font(style::MEDIUM),
+                ]
+                .spacing(8)
+                .align_y(Center),
+            )
+            .padding([6, 10])
+            .style(style::nav(section == self.section))
+            .on_press(Message::Select(section))
+            .into()
+        }))
+        .spacing(4);
+
+        let bar =
+            container(row![brand, space().width(28), tabs, space().width(Fill)].align_y(Center))
+                .padding(Padding {
+                    left: TRAFFIC_LIGHTS_WIDTH,
+                    right: 24.0,
+                    ..Padding::ZERO
+                })
+                .center_y(HEADER_HEIGHT);
+
+        column![mouse_area(bar).on_press(Message::Drag), ui::separator()].into()
     }
 }

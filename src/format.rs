@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 pub fn bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
 
@@ -17,6 +19,16 @@ pub fn bytes(bytes: u64) -> String {
     }
 
     format!("{value:.1} {unit}")
+}
+
+pub fn duration(duration: Duration) -> String {
+    let millis = duration.as_millis();
+
+    match millis {
+        0..1_000 => format!("{millis} ms"),
+        1_000..60_000 => format!("{:.1} s", duration.as_secs_f64()),
+        _ => format!("{} m {} s", millis / 60_000, millis % 60_000 / 1_000),
+    }
 }
 
 pub fn count(count: u64) -> String {

@@ -1,202 +1,428 @@
+pub mod explorer;
 pub mod junk;
-pub mod large_files;
+pub mod overview;
 pub mod style;
 pub mod uninstaller;
 
-use iced::widget::text::IntoFragment;
+use std::borrow::Cow;
+
+use iced::alignment::Horizontal;
+use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    Column, Text, button, center, checkbox, column, container, progress_bar, row, rule, scrollable,
-    space, text,
+    Column, Row, Text, button, center, checkbox, column, container, progress_bar, row, rule,
+    scrollable, space, text,
 };
-use iced::{Center, Element, Fill, Padding, Theme};
+use iced::{Center, Element, Fill, Length, Theme};
 use lucide_icons::Icon;
 
 use crate::format;
 use crate::scan::progress::Snapshot;
+use style::Tone;
+
+pub const CHECK_WIDTH: f32 = 28.0;
+
+const MAX_NAME_CHARS: usize = 64;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Sort<Key> {
+    pub key: Key,
+    pub descending: bool,
+}
+
+impl<Key: PartialEq> Sort<Key> {
+    pub fn toggle(self, key: Key, descending_first: bool) -> Self {
+        if self.key == key {
+            Sort {
+                key,
+                descending: !self.descending,
+            }
+        } else {
+            Sort {
+                key,
+                descending: descending_first,
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Summary {
+    Idle,
+    Scanning(Snapshot),
+    Busy,
+    Found { items: u64, bytes: u64 },
+}
 
 pub fn icon<'a>(icon: Icon) -> Text<'a> {
     text(icon.unicode()).font(style::ICONS)
 }
 
-pub fn prompt<'a, Message: Clone + 'a>(
+pub fn page<'a, Message: 'a>(
+    title: &'static str,
+    subtitle: &'static str,
+    actions: Option<Element<'a, Message>>,
+    body: impl IntoIterator<Item = Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let mut header = row![
+        column![
+            text(title)
+                .size(28)
+                .font(style::SEMIBOLD)
+                .style(style::strong),
+            text(subtitle).size(14).style(style::muted),
+        ]
+        .spacing(4),
+        space().width(Fill),
+    ]
+    .align_y(Center);
+
+    if let Some(actions) = actions {
+        header = header.push(actions);
+    }
+
+    let mut page = column![header, space().height(8)].spacing(16);
+    for element in body {
+        page = page.push(element);
+    }
+
+    page.into()
+}
+
+pub fn empty<'a, Message: Clone + 'a>(
     icon: Icon,
     title: &'static str,
-    status: &'static str,
-    on_scan: Option<Message>,
+    description: &'static str,
+    action: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let scan = button(center(text("Scan").size(22).font(style::BOLD)))
-        .width(140)
-        .height(140)
-        .style(style::scan)
-        .on_press_maybe(on_scan);
-
-    center(
+    container(center(
         column![
-            self::icon(icon).size(72).style(style::folder),
+            self::icon(icon).size(28).style(style::muted),
+            space().height(4),
+            text(title)
+                .size(16)
+                .font(style::SEMIBOLD)
+                .style(style::strong),
+            text(description).size(14).style(style::muted),
             space().height(8),
-            text(title).size(34).font(style::BOLD),
-            text(status).size(15).style(style::muted),
-            space().height(32),
-            scan,
+            action,
         ]
-        .spacing(8)
+        .spacing(6)
         .align_x(Center),
-    )
+    ))
+    .height(Fill)
+    .style(style::card)
     .into()
 }
 
-pub fn scanning<'a, Message: 'a>(
-    icon: Icon,
-    title: &'static str,
-    status: &'static str,
-    snapshot: Snapshot,
-) -> Element<'a, Message> {
-    let mut stats = column![
-        text(format!("{} files", format::count(snapshot.files)))
-            .size(26)
-            .font(style::BOLD),
-        text(format::bytes(snapshot.bytes))
-            .size(15)
+pub fn progress<'a, Message: 'a>(label: &'static str, snapshot: Snapshot) -> Element<'a, Message> {
+    let mut content = column![
+        row![
+            text(label)
+                .size(14)
+                .font(style::MEDIUM)
+                .style(style::strong),
+            space().width(Fill),
+            text(format!(
+                "{} files  ·  {}",
+                format::count(snapshot.files),
+                format::bytes(snapshot.bytes)
+            ))
+            .size(14)
             .style(style::muted),
+        ]
+        .align_y(Center),
     ]
-    .spacing(6)
-    .align_x(Center);
+    .spacing(12);
 
     if let Some(fraction) = snapshot.fraction() {
-        stats = stats.push(space().height(10)).push(
+        content = content.push(
             progress_bar(0.0..=1.0, fraction)
-                .length(320)
-                .girth(6)
+                .girth(4)
                 .style(style::progress),
         );
     }
 
-    center(
-        column![
-            self::icon(icon).size(72).style(style::folder),
-            space().height(8),
-            text(title).size(34).font(style::BOLD),
-            text(status).size(15).style(style::muted),
-            space().height(32),
-            container(stats).center_y(140),
+    container(content.push(metrics(snapshot)))
+        .padding(16)
+        .width(Fill)
+        .style(style::card)
+        .into()
+}
+
+pub fn performance<'a, Message: 'a>(snapshot: Snapshot) -> Element<'a, Message> {
+    container(
+        row![
+            text("Last scan")
+                .size(14)
+                .font(style::MEDIUM)
+                .style(style::strong),
+            space().width(Fill),
+            metrics(snapshot),
+        ]
+        .align_y(Center),
+    )
+    .padding([12, 16])
+    .width(Fill)
+    .style(style::card)
+    .into()
+}
+
+fn metrics<'a, Message: 'a>(snapshot: Snapshot) -> Element<'a, Message> {
+    let metrics = [
+        (Icon::Timer, format::duration(snapshot.elapsed)),
+        (
+            Icon::Gauge,
+            format!("{} files/s", format::count(snapshot.files_per_second())),
+        ),
+        (
+            Icon::Activity,
+            format!("{}/s", format::bytes(snapshot.bytes_per_second())),
+        ),
+        (
+            Icon::Cpu,
+            format!("{} threads", rayon::current_num_threads()),
+        ),
+    ];
+
+    Row::with_children(metrics.into_iter().map(|(icon, value)| {
+        row![
+            self::icon(icon).size(14).style(style::muted),
+            text(value).size(13).style(style::muted),
+        ]
+        .spacing(6)
+        .align_y(Center)
+        .into()
+    }))
+    .spacing(20)
+    .into()
+}
+
+pub fn total<'a, Message: 'a>(
+    value: String,
+    label: &'static str,
+    caption: String,
+) -> Column<'a, Message> {
+    column![
+        row![
+            text(value)
+                .size(22)
+                .font(style::SEMIBOLD)
+                .style(style::strong),
+            text(label).size(14).style(style::muted),
         ]
         .spacing(8)
-        .align_x(Center),
-    )
+        .align_y(Center),
+        text(caption).size(14).style(style::muted),
+    ]
+    .spacing(4)
+}
+
+pub fn segments<'a, Message: 'a>(
+    parts: impl IntoIterator<Item = (u64, Option<Tone>)>,
+) -> Element<'a, Message> {
+    let parts: Vec<(u64, Option<Tone>)> =
+        parts.into_iter().filter(|&(bytes, _)| bytes > 0).collect();
+    let total: u64 = parts.iter().map(|&(bytes, _)| bytes).sum();
+
+    if total == 0 {
+        return container(space())
+            .height(6)
+            .width(Fill)
+            .style(style::segment(None))
+            .into();
+    }
+
+    Row::with_children(parts.into_iter().map(|(bytes, tone)| {
+        let portion = ((bytes * 1000 / total) as u16).max(1);
+
+        container(space())
+            .width(Length::FillPortion(portion))
+            .height(6)
+            .style(style::segment(tone))
+            .into()
+    }))
+    .spacing(2)
     .into()
 }
 
-pub fn placeholder<'a, Message: 'a>(icon: Icon, title: &'static str) -> Element<'a, Message> {
-    center(
-        column![
-            self::icon(icon).size(72).style(style::folder),
-            text(title).size(34).font(style::BOLD),
-            text("Coming soon").size(15).style(style::muted),
-        ]
-        .spacing(12)
-        .align_x(Center),
-    )
-    .into()
+pub fn dot<'a, Message: 'a>(tone: Option<Tone>) -> Element<'a, Message> {
+    container(space())
+        .width(8)
+        .height(8)
+        .style(style::segment(tone))
+        .into()
 }
 
-pub fn page<'a, Message: 'a>(
-    icon: Icon,
-    title: &'static str,
-    subtitle: String,
-    notice: Option<String>,
+pub fn table<'a, Message: 'a>(
+    header: Element<'a, Message>,
+    head: Element<'a, Message>,
     rows: impl IntoIterator<Item = Element<'a, Message>>,
     footer: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let mut heading = column![
-        text(title).size(22).font(style::BOLD),
-        text(subtitle).size(14).style(style::muted),
-    ]
-    .spacing(4);
-
-    if let Some(notice) = notice {
-        heading = heading.push(text(notice).size(13).style(style::notice));
+    let mut list = Column::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        if index > 0 {
+            list = list.push(separator());
+        }
+        list = list.push(row);
     }
 
-    let header = row![self::icon(icon).size(40).style(style::folder), heading]
-        .spacing(16)
-        .align_y(Center);
-
-    let list = Column::with_children(rows).spacing(4).padding(Padding {
-        right: 12.0,
-        ..Padding::ZERO
-    });
-
-    let panel =
-        container(column![header, rule::horizontal(1), scrollable(list).height(Fill)].spacing(16))
-            .padding(24)
-            .height(Fill)
-            .style(style::panel);
-
-    column![panel, footer].spacing(16).into()
-}
-
-pub fn item<'a, Message: 'a>(
-    checked: bool,
-    on_toggle: impl Fn(bool) -> Message + 'a,
-    icon: Icon,
-    name: impl IntoFragment<'a>,
-    details: String,
-    bytes: u64,
-) -> Element<'a, Message> {
-    container(
-        row![
-            checkbox(checked).on_toggle(on_toggle).style(style::check),
-            self::icon(icon).size(26).style(style::folder),
-            column![
-                text(name).size(15),
-                text(details).size(12).style(style::muted)
-            ]
-            .spacing(2),
-            space().width(Fill),
-            text(format::bytes(bytes)).size(14).style(style::subtle),
-        ]
-        .spacing(14)
-        .align_y(Center),
-    )
-    .padding([8, 4])
+    container(column![
+        header,
+        container(head)
+            .padding([8, 16])
+            .width(Fill)
+            .style(style::table_head),
+        separator(),
+        scrollable(list).height(Fill),
+        separator(),
+        container(footer).padding([12, 16]),
+    ])
+    .height(Fill)
+    .style(style::card)
     .into()
 }
 
-pub fn footer<'a, Message: 'a>(
-    summary: String,
-    actions: impl IntoIterator<Item = Element<'a, Message>>,
+pub fn check<'a, Message: 'a>(
+    checked: bool,
+    on_toggle: Option<impl Fn(bool) -> Message + 'a>,
 ) -> Element<'a, Message> {
-    let mut bar = row![
-        icon(Icon::Info).size(16).style(style::muted),
-        text(summary).size(15),
-        space().width(Fill),
-    ]
-    .spacing(10)
-    .align_y(Center);
-
-    for action in actions {
-        bar = bar.push(action);
-    }
-
-    bar.into()
+    container(
+        checkbox(checked)
+            .size(16)
+            .on_toggle_maybe(on_toggle)
+            .style(style::check),
+    )
+    .width(CHECK_WIDTH)
+    .into()
 }
 
-pub fn selection(count: usize, bytes: u64) -> String {
-    match count {
-        0 => "No items selected".to_owned(),
-        1 => format!("1 item selected  |  {}", format::bytes(bytes)),
-        count => format!("{count} items selected  |  {}", format::bytes(bytes)),
+pub fn name<'a, Message: 'a>(name: impl Into<Cow<'a, str>>) -> Element<'a, Message> {
+    container(
+        text(truncate(name.into()))
+            .size(14)
+            .wrapping(Wrapping::None),
+    )
+    .width(Fill)
+    .clip(true)
+    .into()
+}
+
+fn truncate(name: Cow<'_, str>) -> Cow<'_, str> {
+    match name.char_indices().nth(MAX_NAME_CHARS) {
+        Some((end, _)) => Cow::Owned(format!("{}…", &name[..end])),
+        None => name,
     }
+}
+
+pub fn separator<'a, Message: 'a>() -> Element<'a, Message> {
+    rule::horizontal(1).style(style::separator).into()
+}
+
+pub fn heading<'a, Message: 'a>(
+    label: &'static str,
+    width: impl Into<Length>,
+    right: bool,
+) -> Element<'a, Message> {
+    let alignment = if right {
+        Horizontal::Right
+    } else {
+        Horizontal::Left
+    };
+
+    container(text(label).size(12).font(style::MEDIUM).style(style::muted))
+        .width(width)
+        .align_x(alignment)
+        .into()
+}
+
+pub fn sortable<'a, Message: Clone + 'a, Key: PartialEq>(
+    label: &'static str,
+    width: impl Into<Length>,
+    right: bool,
+    sort: Sort<Key>,
+    key: Key,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let mut content = row![text(label).size(12).font(style::MEDIUM)]
+        .spacing(4)
+        .align_y(Center);
+
+    if sort.key == key {
+        let arrow = if sort.descending {
+            Icon::ArrowDown
+        } else {
+            Icon::ArrowUp
+        };
+        content = content.push(self::icon(arrow).size(12));
+    }
+
+    let alignment = if right {
+        Horizontal::Right
+    } else {
+        Horizontal::Left
+    };
+
+    container(
+        button(content)
+            .padding(0)
+            .style(if sort.key == key {
+                style::link_active
+            } else {
+                style::link
+            })
+            .on_press(on_press),
+    )
+    .width(width)
+    .align_x(alignment)
+    .into()
+}
+
+pub fn value<'a, Message: 'a>(
+    value: impl IntoFragment<'a>,
+    width: impl Into<Length>,
+) -> Element<'a, Message> {
+    container(text(value).size(14))
+        .width(width)
+        .align_x(Horizontal::Right)
+        .into()
 }
 
 pub fn action<'a, Message: Clone + 'a>(
     label: &'static str,
+    icon: Option<Icon>,
     style: fn(&Theme, button::Status) -> button::Style,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    button(text(label).size(15).font(style::BOLD))
-        .padding([12, 28])
+    let mut content = row![].spacing(6).align_y(Center);
+
+    if let Some(icon) = icon {
+        content = content.push(self::icon(icon).size(14));
+    }
+
+    button(content.push(text(label).size(14).font(style::MEDIUM)))
+        .padding([7, 12])
         .style(style)
         .on_press_maybe(on_press)
         .into()
+}
+
+pub fn icon_button<'a, Message: Clone + 'a>(
+    icon: Icon,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    button(center(self::icon(icon).size(16)))
+        .width(32)
+        .height(32)
+        .style(style::secondary)
+        .on_press_maybe(on_press)
+        .into()
+}
+
+pub fn selection(count: usize, bytes: u64) -> String {
+    match count {
+        0 => "Nothing selected".to_owned(),
+        1 => format!("1 item selected  ·  {}", format::bytes(bytes)),
+        count => format!("{count} items selected  ·  {}", format::bytes(bytes)),
+    }
 }
