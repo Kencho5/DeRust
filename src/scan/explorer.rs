@@ -61,6 +61,19 @@ impl FileKind {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            FileKind::Video => "Video",
+            FileKind::Image => "Image",
+            FileKind::Audio => "Audio file",
+            FileKind::Document => "Document",
+            FileKind::Archive => "Archive",
+            FileKind::DiskImage => "Disk image",
+            FileKind::Code => "Developer file",
+            FileKind::Other => "File",
+        }
+    }
+
     fn of(name: &OsStr) -> FileKind {
         let Some(extension) = Path::new(name).extension().and_then(OsStr::to_str) else {
             return FileKind::Other;
@@ -226,6 +239,10 @@ pub fn scan(progress: &Progress) -> Tree {
 }
 
 fn walk(dir: &Dir, location: Option<&Path>, name: &OsStr, progress: &Progress) -> Node {
+    if progress.is_cancelled() {
+        return Node::folder(name, Vec::new());
+    }
+
     let mut children = Vec::new();
     let mut subdirs = Names::default();
     let mut rest = Usage::default();

@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::fs;
 use std::ops::Add;
 use std::path::{Path, PathBuf};
@@ -6,11 +7,10 @@ use std::path::{Path, PathBuf};
 use plist::Value;
 use rayon::prelude::*;
 
+use crate::platform::{self, FileIcon};
 use crate::recycle::{self, Cleanup};
 use crate::scan::progress::Progress;
 use crate::scan::{self, Usage};
-
-const LARGEST: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -133,6 +133,8 @@ pub struct Target {
     pub path: PathBuf,
     pub name: String,
     pub bytes: u64,
+    pub icon: Option<FileIcon>,
+    owner: String,
 }
 
 #[derive(Debug, Clone)]
@@ -140,12 +142,6 @@ pub struct Entry {
     pub category: Category,
     pub usage: Usage,
     pub targets: Vec<Target>,
-}
-
-impl Entry {
-    pub fn largest(&self) -> impl Iterator<Item = &Target> {
-        self.targets.iter().take(LARGEST)
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -161,11 +157,18 @@ impl Report {
             .fold(Usage::default(), Add::add)
     }
 
-    pub fn paths(&self, categories: &[Category]) -> Vec<PathBuf> {
+    pub fn paths(&self, selected: &[Vec<bool>]) -> Vec<PathBuf> {
         self.entries
             .iter()
-            .filter(|entry| categories.contains(&entry.category))
-            .flat_map(|entry| entry.targets.iter().map(|target| target.path.clone()))
+            .zip(selected)
+            .flat_map(|(entry, selected)| {
+                entry
+                    .targets
+                    .iter()
+                    .zip(selected)
+                    .filter(|&(_, &checked)| checked)
+                    .map(|(target, _)| target.path.clone())
+            })
             .collect()
     }
 }
@@ -181,7 +184,7 @@ pub fn scan(progress: &Progress) -> Report {
 
     progress.set_total(Category::ALL.len() as u64);
 
-    let entries = Category::ALL
+    let mut entries: Vec<Entry> = Category::ALL
         .par_iter()
         .map(|&category| {
             let entry = measure(category, category.targets(&home), progress);
@@ -189,6 +192,28 @@ pub fn scan(progress: &Progress) -> Report {
             entry
         })
         .collect();
+
+    let mut owners: Vec<&str> = entries
+        .iter()
+        .flat_map(|entry| &entry.targets)
+        .map(|target| target.owner.as_str())
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+
+    let icons: HashMap<String, FileIcon> = owners
+        .into_par_iter()
+        .filter_map(|owner| {
+            let icon = platform::application(owner).and_then(|app| platform::icon(&app))?;
+            Some((owner.to_owned(), icon))
+        })
+        .collect();
+
+    for entry in &mut entries {
+        for target in &mut entry.targets {
+            target.icon = icons.get(&target.owner).cloned();
+        }
+    }
 
     Report { entries }
 }
@@ -226,6 +251,8 @@ fn children(dir: &Path, group: Option<&str>) -> Vec<Target> {
         .flatten()
         .map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
+            let owner = group.map_or_else(|| name.clone(), str::to_owned);
+
             Target {
                 path: entry.path(),
                 name: match group {
@@ -233,6 +260,8 @@ fn children(dir: &Path, group: Option<&str>) -> Vec<Target> {
                     None => name,
                 },
                 bytes: 0,
+                icon: None,
+                owner,
             }
         })
         .collect()

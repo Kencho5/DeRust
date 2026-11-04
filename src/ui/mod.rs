@@ -1,33 +1,33 @@
+pub mod donut;
 pub mod explorer;
 pub mod junk;
 pub mod overview;
 pub mod style;
-pub mod treemap;
 pub mod uninstaller;
 
 use std::borrow::Cow;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use iced::alignment::Horizontal;
 use iced::widget::text::{IntoFragment, Wrapping};
 use iced::widget::{
-    Column, Row, Text, button, center, checkbox, column, container, progress_bar, row, rule,
-    scrollable, space, text,
+    Column, Row, Text, button, center, checkbox, column, container, image, progress_bar, row, rule,
+    scrollable, space, text, tooltip,
 };
 use iced::{Center, Element, Fill, Length, Theme};
 use lucide_icons::Icon;
 
 use crate::format;
+use crate::platform::{self, FileIcon};
 use crate::scan::progress::Snapshot;
 use style::Tone;
 
-pub const CHECK_WIDTH: f32 = 28.0;
-pub const SIZE_WIDTH: f32 = 88.0;
-pub const SHARE_WIDTH: f32 = 96.0;
-pub const COLUMN_GAP: f32 = 16.0;
+const CHECK_WIDTH: f32 = 28.0;
 
 const MAX_NAME_CHARS: usize = 64;
-const DETAIL_SIZE_WIDTH: f32 = 72.0;
+const SIDEBAR_WIDTH: f32 = 240.0;
+const LINE_ICON: f32 = 24.0;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Sort<Key> {
@@ -120,7 +120,11 @@ pub fn empty<'a, Message: Clone + 'a>(
     .into()
 }
 
-pub fn progress<'a, Message: 'a>(label: &'static str, snapshot: Snapshot) -> Element<'a, Message> {
+pub fn progress<'a, Message: Clone + 'a>(
+    label: &'static str,
+    snapshot: Snapshot,
+    stop: Message,
+) -> Element<'a, Message> {
     let mut content = column![
         row![
             text(label)
@@ -128,14 +132,13 @@ pub fn progress<'a, Message: 'a>(label: &'static str, snapshot: Snapshot) -> Ele
                 .font(style::MEDIUM)
                 .style(style::strong),
             space().width(Fill),
-            text(format!(
-                "{} files  ·  {}",
-                format::count(snapshot.files),
-                format::bytes(snapshot.bytes)
-            ))
-            .size(14)
-            .style(style::muted),
+            text(format::bytes(snapshot.bytes))
+                .size(14)
+                .font(style::MEDIUM)
+                .style(style::strong),
+            action("Stop", Some(Icon::Square), style::secondary, Some(stop)),
         ]
+        .spacing(16)
         .align_y(Center),
     ]
     .spacing(12);
@@ -170,58 +173,44 @@ pub fn with_metrics<'a, Message: 'a>(
 
 fn metrics<'a, Message: 'a>(snapshot: Snapshot) -> Element<'a, Message> {
     let metrics = [
-        (Icon::Timer, format::duration(snapshot.elapsed)),
+        (Icon::Timer, format::duration(snapshot.elapsed), 44.0),
+        (
+            Icon::Files,
+            format!("{} files", format::count(snapshot.files)),
+            96.0,
+        ),
         (
             Icon::Gauge,
             format!("{} files/s", format::count(snapshot.files_per_second())),
+            92.0,
         ),
         (
             Icon::Activity,
             format!("{}/s", format::bytes(snapshot.bytes_per_second())),
+            64.0,
         ),
         (
             Icon::Cpu,
             format!("{} threads", rayon::current_num_threads()),
+            60.0,
         ),
     ];
 
-    Row::with_children(metrics.into_iter().map(|(icon, value)| {
+    Row::with_children(metrics.into_iter().map(|(icon, value, width)| {
         row![
             self::icon(icon).size(14).style(style::muted),
-            text(value).size(13).style(style::muted),
+            text(value)
+                .size(13)
+                .style(style::muted)
+                .wrapping(Wrapping::None)
+                .width(width),
         ]
         .spacing(6)
         .align_y(Center)
         .into()
     }))
-    .spacing(20)
+    .spacing(16)
     .into()
-}
-
-pub fn total<'a, Message: 'a>(
-    value: String,
-    label: &'static str,
-    caption: String,
-) -> Column<'a, Message> {
-    column![
-        row![
-            text(value)
-                .size(22)
-                .font(style::SEMIBOLD)
-                .style(style::strong),
-            text(label).size(14).style(style::muted),
-        ]
-        .spacing(8)
-        .align_y(Center),
-        text(caption).size(14).style(style::muted),
-    ]
-    .spacing(4)
-}
-
-pub fn segments<'a, Message: 'a>(
-    parts: impl IntoIterator<Item = (u64, Option<Tone>)>,
-) -> Element<'a, Message> {
-    bar(parts, 6.0)
 }
 
 pub fn bar<'a, Message: 'a>(
@@ -261,33 +250,120 @@ pub fn dot<'a, Message: 'a>(tone: Option<Tone>) -> Element<'a, Message> {
         .into()
 }
 
-pub fn table<'a, Message: 'a>(
-    header: Element<'a, Message>,
-    head: Element<'a, Message>,
-    rows: impl IntoIterator<Item = Element<'a, Message>>,
-    footer: Element<'a, Message>,
+pub fn split<'a, Message: 'a>(
+    sidebar: impl IntoIterator<Item = Element<'a, Message>>,
+    content: Element<'a, Message>,
+    status: String,
+    action: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let mut list = Column::new();
-    for (index, row) in rows.into_iter().enumerate() {
-        if index > 0 {
-            list = list.push(separator());
-        }
-        list = list.push(row);
-    }
+    let sidebar = scrollable(Column::with_children(sidebar).spacing(2).padding(12))
+        .width(SIDEBAR_WIDTH)
+        .height(Fill);
+
+    let footer = row![
+        text(status).size(14).style(style::muted),
+        space().width(Fill),
+        action,
+    ]
+    .align_y(Center);
 
     container(column![
-        header,
-        container(head)
-            .padding([8, 16])
-            .width(Fill)
-            .style(style::table_head),
+        row![
+            sidebar,
+            rule::vertical(1).style(style::separator),
+            container(content).width(Fill).height(Fill),
+        ]
+        .height(Fill),
         separator(),
-        scrollable(list).height(Fill),
-        separator(),
-        container(footer).padding([12, 16]),
+        container(footer).padding([12, 20]),
     ])
     .height(Fill)
+    .clip(true)
     .style(style::card)
+    .into()
+}
+
+pub fn choice<'a, Message: Clone + 'a>(
+    leading: Option<Element<'a, Message>>,
+    label: impl IntoFragment<'a>,
+    trailing: String,
+    selected: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let mut content = row![].spacing(10).align_y(Center);
+
+    if let Some(leading) = leading {
+        content = content.push(leading);
+    }
+
+    let content = content
+        .push(
+            container(text(label).size(14).wrapping(Wrapping::None))
+                .width(Fill)
+                .clip(true),
+        )
+        .push(text(trailing).size(13).style(style::muted));
+
+    button(content)
+        .padding([9, 12])
+        .width(Fill)
+        .style(style::choice(selected))
+        .on_press(on_press)
+        .into()
+}
+
+pub fn group<'a, Message: 'a>(label: &'static str) -> Element<'a, Message> {
+    container(self::label(label)).padding([12, 12]).into()
+}
+
+pub fn line<'a, Message: Clone + 'a>(
+    check: Option<Element<'a, Message>>,
+    icon: Option<&FileIcon>,
+    bytes: u64,
+    name: impl Into<Cow<'a, str>>,
+    reveal: Message,
+) -> Element<'a, Message> {
+    let check = check.unwrap_or_else(|| space().into());
+
+    row![
+        check,
+        thumbnail(icon, LINE_ICON),
+        container(
+            text(truncate(name.into(), MAX_NAME_CHARS))
+                .size(14)
+                .wrapping(Wrapping::None),
+        )
+        .width(Fill)
+        .clip(true),
+        text(format::bytes(bytes)).size(14).style(style::muted),
+        reveal_button(reveal),
+    ]
+    .spacing(12)
+    .align_y(Center)
+    .padding([8, 20])
+    .into()
+}
+
+pub fn thumbnail<'a, Message: 'a>(icon: Option<&FileIcon>, size: f32) -> Element<'a, Message> {
+    static FOLDER: LazyLock<Option<FileIcon>> = LazyLock::new(platform::folder_icon);
+
+    match icon.or(FOLDER.as_ref()) {
+        Some(icon) => image(icon.clone()).width(size).height(size).into(),
+        None => space().width(size).height(size).into(),
+    }
+}
+
+pub fn reveal_button<'a, Message: Clone + 'a>(on_press: Message) -> Element<'a, Message> {
+    tooltip(
+        button(self::icon(Icon::FolderSearch).size(14).line_height(1.0))
+            .padding([2, 6])
+            .style(style::link)
+            .on_press(on_press),
+        container(text("Reveal in Finder").size(12))
+            .padding([4, 8])
+            .style(style::tip),
+        tooltip::Position::Left,
+    )
     .into()
 }
 
@@ -323,62 +399,6 @@ pub fn truncate(name: Cow<'_, str>, max_chars: usize) -> Cow<'_, str> {
     }
 }
 
-pub fn panel<'a, Message: 'a>(
-    title: impl IntoFragment<'a>,
-    caption: String,
-    body: impl IntoIterator<Item = Element<'a, Message>>,
-) -> Element<'a, Message> {
-    let header = column![
-        text(title)
-            .size(16)
-            .font(style::SEMIBOLD)
-            .style(style::strong)
-            .wrapping(Wrapping::None),
-        text(caption).size(13).style(style::muted),
-    ]
-    .spacing(4);
-
-    container(
-        column![
-            header,
-            separator(),
-            scrollable(Column::with_children(body).spacing(2)).height(Fill)
-        ]
-        .spacing(16),
-    )
-    .padding(20)
-    .width(Fill)
-    .height(Fill)
-    .clip(true)
-    .style(style::card)
-    .into()
-}
-
-pub fn detail<'a, Message: 'a>(bytes: u64, name: impl Into<Cow<'a, str>>) -> Element<'a, Message> {
-    row![
-        container(
-            text(format::bytes(bytes))
-                .size(13)
-                .font(style::MEDIUM)
-                .style(style::strong),
-        )
-        .width(DETAIL_SIZE_WIDTH)
-        .align_x(Horizontal::Right),
-        container(
-            text(truncate(name.into(), MAX_NAME_CHARS))
-                .size(13)
-                .style(style::muted)
-                .wrapping(Wrapping::None),
-        )
-        .width(Fill)
-        .clip(true),
-    ]
-    .spacing(14)
-    .align_y(Center)
-    .padding([6, 0])
-    .into()
-}
-
 pub fn label<'a, Message: 'a>(label: &'static str) -> Element<'a, Message> {
     text(label)
         .size(12)
@@ -394,51 +414,8 @@ pub fn home_relative(path: &Path) -> String {
     }
 }
 
-pub fn size<'a, Message: 'a>(bytes: u64) -> Element<'a, Message> {
-    container(
-        text(format::bytes(bytes))
-            .size(14)
-            .font(style::MEDIUM)
-            .style(style::strong),
-    )
-    .width(SIZE_WIDTH)
-    .align_x(Horizontal::Right)
-    .into()
-}
-
-pub fn share<'a, Message: 'a>(bytes: u64, total: u64) -> Element<'a, Message> {
-    let share = if total == 0 {
-        0.0
-    } else {
-        bytes as f32 / total as f32
-    };
-
-    progress_bar(0.0..=1.0, share)
-        .length(SHARE_WIDTH)
-        .girth(4)
-        .style(style::share)
-        .into()
-}
-
 pub fn separator<'a, Message: 'a>() -> Element<'a, Message> {
     rule::horizontal(1).style(style::separator).into()
-}
-
-pub fn heading<'a, Message: 'a>(
-    label: &'static str,
-    width: impl Into<Length>,
-    right: bool,
-) -> Element<'a, Message> {
-    let alignment = if right {
-        Horizontal::Right
-    } else {
-        Horizontal::Left
-    };
-
-    container(text(label).size(12).font(style::MEDIUM).style(style::muted))
-        .width(width)
-        .align_x(alignment)
-        .into()
 }
 
 pub fn sortable<'a, Message: Clone + 'a, Key: PartialEq>(
@@ -481,16 +458,6 @@ pub fn sortable<'a, Message: Clone + 'a, Key: PartialEq>(
     .width(width)
     .align_x(alignment)
     .into()
-}
-
-pub fn value<'a, Message: 'a>(
-    value: impl IntoFragment<'a>,
-    width: impl Into<Length>,
-) -> Element<'a, Message> {
-    container(text(value).size(14))
-        .width(width)
-        .align_x(Horizontal::Right)
-        .into()
 }
 
 pub fn action<'a, Message: Clone + 'a>(

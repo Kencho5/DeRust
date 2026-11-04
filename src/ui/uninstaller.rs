@@ -1,18 +1,19 @@
 use std::path::PathBuf;
 
-use iced::widget::{button, container, row, space, text};
-use iced::{Center, Element, Fill, FillPortion, Task};
+use iced::widget::{Column, Row, button, column, row, scrollable, space, text};
+use iced::{Center, Element, Fill, Shrink, Task};
 use lucide_icons::Icon;
 
-use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::apps::{self, InstalledApp};
 use crate::scan::progress::Snapshot;
-use crate::task::{self, Update, background};
-use crate::ui::style::{self, Tone};
-use crate::ui::{self, COLUMN_GAP, SHARE_WIDTH, SIZE_WIDTH, Sort, Summary};
+use crate::task::{self, Running, Update, background};
+use crate::ui::style;
+use crate::ui::{self, Sort, Summary};
+use crate::{format, platform};
 
-const LEFTOVERS_WIDTH: f32 = 110.0;
+const ROW_ICON: f32 = 32.0;
+const DETAIL_ICON: f32 = 44.0;
 const TITLE: &str = "Applications";
 const SUBTITLE: &str = "Remove apps along with the files they leave behind.";
 
@@ -20,9 +21,36 @@ const SUBTITLE: &str = "Remove apps along with the files they leave behind.";
 pub struct Uninstaller {
     state: State,
     sort: Sort<SortKey>,
-    focus: Option<usize>,
+    filter: Filter,
+    open: Option<usize>,
     cleanup: Option<Cleanup>,
     performance: Option<Snapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Leftovers,
+    Selected,
+}
+
+impl Filter {
+    fn title(self) -> &'static str {
+        match self {
+            Filter::All => "All applications",
+            Filter::Leftovers => "With leftovers",
+            Filter::Selected => "Selected",
+        }
+    }
+
+    fn matches(self, app: &InstalledApp, selected: bool) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Leftovers => !app.leftovers.is_empty(),
+            Filter::Selected => selected,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -37,7 +65,7 @@ pub enum SortKey {
 enum State {
     #[default]
     Idle,
-    Scanning(Snapshot),
+    Scanning(Running),
     Removing,
     Done {
         apps: Vec<InstalledApp>,
@@ -49,9 +77,13 @@ enum State {
 pub enum Message {
     Scan,
     Scanning(Update<Vec<InstalledApp>>),
+    Stop,
     Toggle(usize, bool),
     SelectAll(bool),
-    Focus(usize),
+    Filter(Filter),
+    Open(usize),
+    Close,
+    Reveal(PathBuf),
     Sort(SortKey),
     Uninstall,
     Uninstalled(Cleanup),
@@ -65,24 +97,39 @@ impl Uninstaller {
                 return self.start_scan();
             }
             Message::Scanning(Update::Progress(snapshot)) => {
-                if let State::Scanning(current) = &mut self.state {
-                    *current = snapshot;
+                if let State::Scanning(running) = &mut self.state {
+                    running.snapshot = snapshot;
+                }
+            }
+            Message::Stop => {
+                if matches!(self.state, State::Scanning(_)) {
+                    self.state = State::Idle;
                 }
             }
             Message::Scanning(Update::Finished(apps, snapshot)) => {
                 self.performance = Some(snapshot);
 
                 let selected = vec![false; apps.len()];
-                self.focus = None;
+                self.open = None;
                 self.state = State::Done { apps, selected };
             }
-            Message::Focus(index) => self.focus = Some(index),
+            Message::Filter(filter) => {
+                self.filter = filter;
+                self.open = None;
+            }
+            Message::Open(index) => self.open = Some(index),
+            Message::Close => self.open = None,
+            Message::Reveal(path) => platform::reveal(&path),
             Message::Sort(key) => {
                 self.sort = self.sort.toggle(key, key != SortKey::Name);
             }
             Message::SelectAll(checked) => {
-                if let State::Done { selected, .. } = &mut self.state {
-                    selected.fill(checked);
+                if let State::Done { apps, selected } = &mut self.state {
+                    for (app, slot) in apps.iter().zip(selected.iter_mut()) {
+                        if self.filter.matches(app, *slot) {
+                            *slot = checked;
+                        }
+                    }
                 }
             }
             Message::Toggle(index, checked) => {
@@ -119,14 +166,15 @@ impl Uninstaller {
     }
 
     fn start_scan(&mut self) -> Task<Message> {
-        self.state = State::Scanning(Snapshot::default());
-        Task::run(task::with_progress(apps::scan), Message::Scanning)
+        let (task, running) = task::run(apps::scan, Message::Scanning);
+        self.state = State::Scanning(running);
+        task
     }
 
     pub fn summary(&self) -> Summary {
         match &self.state {
             State::Idle => Summary::Idle,
-            State::Scanning(snapshot) => Summary::Scanning(*snapshot),
+            State::Scanning(running) => Summary::Scanning(running.snapshot),
             State::Removing => Summary::Busy,
             State::Done { apps, .. } => Summary::Found {
                 items: apps.len() as u64,
@@ -157,16 +205,18 @@ impl Uninstaller {
                     Some(Message::Scan),
                 ),
             )],
-            State::Scanning(snapshot) => vec![ui::progress("Looking for apps", *snapshot)],
+            State::Scanning(running) => vec![ui::progress(
+                "Looking for apps",
+                running.snapshot,
+                Message::Stop,
+            )],
             State::Removing => vec![ui::empty(
                 Icon::Trash2,
                 "Moving apps to Trash",
                 "This only takes a moment.",
                 space().into(),
             )],
-            State::Done { apps, selected } => {
-                results(apps, selected, self.sort, self.focus, self.cleanup)
-            }
+            State::Done { apps, selected } => results(apps, selected, self),
         };
 
         let actions = rescan.map(|rescan| ui::with_metrics(self.performance, rescan));
@@ -178,12 +228,8 @@ impl Uninstaller {
 fn results<'a>(
     apps: &'a [InstalledApp],
     selected: &'a [bool],
-    sort: Sort<SortKey>,
-    focus: Option<usize>,
-    cleanup: Option<Cleanup>,
+    view: &'a Uninstaller,
 ) -> Vec<Element<'a, Message>> {
-    let total: u64 = apps.iter().map(InstalledApp::total_bytes).sum();
-
     let (selected_count, selected_bytes) = apps
         .iter()
         .zip(selected)
@@ -192,72 +238,58 @@ fn results<'a>(
             (count + 1, bytes + app.total_bytes())
         });
 
-    let leftovers: u64 = apps.iter().map(|app| app.leftover_bytes).sum();
-    let bundles = total - leftovers;
-
-    let caption = cleanup.map_or_else(
-        || "Apple apps are hidden so they can't be removed by accident.".to_owned(),
-        Cleanup::summary,
-    );
-
-    let legend = row![
-        ui::dot(Some(Tone::Orange)),
-        text(format!("Apps  {}", format::bytes(bundles)))
-            .size(13)
-            .style(style::muted),
-        space().width(12),
-        ui::dot(Some(Tone::Blue)),
-        text(format!("Leftovers  {}", format::bytes(leftovers)))
-            .size(13)
-            .style(style::muted),
-    ]
-    .spacing(8)
-    .align_y(Center);
-
-    let header = ui::total(format::bytes(total), "used by apps", caption)
-        .push(space().height(6))
-        .push(ui::segments([
-            (bundles, Some(Tone::Orange)),
-            (leftovers, Some(Tone::Blue)),
-        ]))
-        .push(legend)
-        .spacing(8)
-        .padding(16);
-
-    let all = !selected.is_empty() && selected.iter().all(|&checked| checked);
-
-    let head = row![
-        ui::check(all, Some(Message::SelectAll)),
-        ui::sortable(
-            "Size",
-            SIZE_WIDTH,
-            true,
-            sort,
-            SortKey::Size,
-            Message::Sort(SortKey::Size),
+    let sidebar = [
+        ui::group("Show"),
+        filter(view.filter, Filter::All, apps.len()),
+        filter(
+            view.filter,
+            Filter::Leftovers,
+            apps.iter().filter(|app| !app.leftovers.is_empty()).count(),
         ),
-        space().width(COLUMN_GAP),
-        ui::heading("Share", SHARE_WIDTH, false),
-        space().width(COLUMN_GAP),
-        ui::sortable(
-            "Name",
-            Fill,
-            false,
-            sort,
-            SortKey::Name,
-            Message::Sort(SortKey::Name),
-        ),
-        ui::sortable(
-            "Leftovers",
-            LEFTOVERS_WIDTH,
-            true,
-            sort,
-            SortKey::Leftovers,
-            Message::Sort(SortKey::Leftovers),
-        ),
+        filter(view.filter, Filter::Selected, selected_count),
     ];
 
-    let mut order: Vec<usize> = (0..apps.len()).collect();
+    let content = match view.open.and_then(|index| apps.get(index)) {
+        Some(app) => details(app),
+        None => list(apps, selected, view.filter, view.sort),
+    };
+
+    let selection = ui::selection(selected_count, selected_bytes);
+    let status = match view.cleanup {
+        Some(cleanup) => format!("{}  ·  {selection}", cleanup.summary()),
+        None => selection,
+    };
+
+    let uninstall = ui::action(
+        "Uninstall",
+        Some(Icon::Trash2),
+        style::danger,
+        (selected_count > 0).then_some(Message::Uninstall),
+    );
+
+    vec![ui::split(sidebar, content, status, uninstall)]
+}
+
+fn filter<'a>(current: Filter, filter: Filter, count: usize) -> Element<'a, Message> {
+    ui::choice(
+        None,
+        filter.title(),
+        format::count(count as u64),
+        current == filter,
+        Message::Filter(filter),
+    )
+}
+
+fn list<'a>(
+    apps: &'a [InstalledApp],
+    selected: &'a [bool],
+    filter: Filter,
+    sort: Sort<SortKey>,
+) -> Element<'a, Message> {
+    let mut order: Vec<usize> = (0..apps.len())
+        .filter(|&index| filter.matches(&apps[index], selected[index]))
+        .collect();
+
     match sort.key {
         SortKey::Name => order.sort_by_cached_key(|&index| apps[index].name.to_lowercase()),
         SortKey::Leftovers => order.sort_by_key(|&index| apps[index].leftover_bytes),
@@ -267,121 +299,136 @@ fn results<'a>(
         order.reverse();
     }
 
-    let focus = focus
-        .filter(|&index| index < apps.len())
-        .or_else(|| order.first().copied());
-    let largest = apps
-        .iter()
-        .map(InstalledApp::total_bytes)
-        .max()
-        .unwrap_or(0);
+    let all = !order.is_empty() && order.iter().all(|&index| selected[index]);
 
-    let rows = order
-        .into_iter()
-        .filter_map(|index| Some((index, apps.get(index)?, *selected.get(index)?)))
-        .map(|(index, app, checked)| {
-            let leftovers = match app.leftovers.len() {
-                0 => "—".to_owned(),
-                _ => format::bytes(app.leftover_bytes),
-            };
+    let sorting = [
+        ("Name", SortKey::Name),
+        ("Size", SortKey::Size),
+        ("Leftovers", SortKey::Leftovers),
+    ]
+    .map(|(label, key)| ui::sortable(label, Shrink, false, sort, key, Message::Sort(key)));
 
-            let content = row![
-                ui::check(
-                    checked,
-                    Some(move |checked| Message::Toggle(index, checked)),
-                ),
-                ui::size(app.total_bytes()),
-                space().width(COLUMN_GAP),
-                ui::share(app.total_bytes(), largest),
-                space().width(COLUMN_GAP),
-                row![
-                    ui::icon(Icon::AppWindow).size(16).style(style::muted),
-                    ui::name(app.name.as_str()),
-                ]
-                .spacing(10)
-                .align_y(Center)
-                .width(Fill),
-                ui::value(leftovers, LEFTOVERS_WIDTH),
-            ]
-            .align_y(Center);
-
-            button(content)
-                .padding([10, 16])
-                .width(Fill)
-                .style(style::row(focus == Some(index)))
-                .on_press(Message::Focus(index))
-                .into()
-        });
-
-    let footer = row![
-        text(ui::selection(selected_count, selected_bytes))
-            .size(14)
+    let toolbar = row![
+        ui::check(all, Some(Message::SelectAll)),
+        text(format!("{} apps", format::count(order.len() as u64)))
+            .size(13)
             .style(style::muted),
         space().width(Fill),
-        ui::action(
-            "Uninstall",
-            Some(Icon::Trash2),
-            style::danger,
-            (selected_count > 0).then_some(Message::Uninstall),
-        ),
+        text("Sort by").size(12).style(style::muted),
+        Row::with_children(sorting).spacing(14),
     ]
-    .align_y(Center);
+    .spacing(12)
+    .align_y(Center)
+    .padding([12, 20]);
 
-    let table = ui::table(header.into(), head.into(), rows, footer.into());
+    let mut rows = Column::new();
+    for (position, index) in order.into_iter().enumerate() {
+        if position > 0 {
+            rows = rows.push(ui::separator());
+        }
 
-    vec![
-        row![
-            container(table).width(FillPortion(3)),
-            container(details(focus.and_then(|index| apps.get(index)))).width(FillPortion(2)),
+        let app = &apps[index];
+        let leftovers = match app.leftovers.len() {
+            0 => "No leftovers".to_owned(),
+            1 => format!("1 leftover  ·  {}", format::bytes(app.leftover_bytes)),
+            count => format!(
+                "{count} leftovers  ·  {}",
+                format::bytes(app.leftover_bytes)
+            ),
+        };
+
+        let content = row![
+            ui::check(
+                selected[index],
+                Some(move |checked| Message::Toggle(index, checked)),
+            ),
+            ui::thumbnail(app.icon.as_ref(), ROW_ICON),
+            column![
+                ui::name(app.name.as_str()),
+                text(leftovers).size(12).style(style::muted),
+            ]
+            .spacing(2)
+            .width(Fill),
+            text(format::bytes(app.total_bytes())).size(14),
+            ui::icon(Icon::ChevronRight).size(14).style(style::muted),
         ]
-        .spacing(16)
-        .height(Fill)
-        .into(),
-    ]
-}
+        .spacing(12)
+        .align_y(Center);
 
-fn details(app: Option<&InstalledApp>) -> Element<'_, Message> {
-    let Some(app) = app else {
-        return ui::panel("No apps found", String::new(), []);
-    };
-
-    let caption = format!(
-        "{}  ·  {}",
-        ui::home_relative(&app.path),
-        format::bytes(app.total_bytes())
-    );
-
-    let mut body = vec![
-        ui::label("App"),
-        space().height(4).into(),
-        ui::detail(app.bytes, "App bundle"),
-        space().height(12).into(),
-        ui::label("Leftovers"),
-        space().height(4).into(),
-    ];
-
-    if app.leftovers.is_empty() {
-        body.push(
-            text("No leftover files found.")
-                .size(13)
-                .style(style::muted)
-                .into(),
-        );
-    } else {
-        body.extend(
-            app.leftovers
-                .iter()
-                .map(|leftover| ui::detail(leftover.bytes, ui::home_relative(&leftover.path))),
+        rows = rows.push(
+            button(content)
+                .padding([12, 20])
+                .width(Fill)
+                .style(style::row(false))
+                .on_press(Message::Open(index)),
         );
     }
 
-    body.push(space().height(12).into());
-    body.push(
-        text("Everything listed here moves to Trash together.")
-            .size(12)
-            .style(style::muted)
-            .into(),
-    );
+    column![toolbar, ui::separator(), scrollable(rows).height(Fill)].into()
+}
 
-    ui::panel(app.name.as_str(), caption, body)
+fn details(app: &InstalledApp) -> Element<'_, Message> {
+    let back = button(
+        row![
+            ui::icon(Icon::ChevronLeft).size(14),
+            text("All apps").size(13)
+        ]
+        .spacing(4)
+        .align_y(Center),
+    )
+    .padding(0)
+    .style(style::link)
+    .on_press(Message::Close);
+
+    let header = column![
+        back,
+        space().height(6),
+        row![
+            ui::thumbnail(app.icon.as_ref(), DETAIL_ICON),
+            column![
+                text(app.name.as_str())
+                    .size(16)
+                    .font(style::MEDIUM)
+                    .style(style::strong),
+                text(format!(
+                    "{}  ·  {}",
+                    format::bytes(app.total_bytes()),
+                    ui::home_relative(&app.path)
+                ))
+                .size(12)
+                .style(style::muted),
+            ]
+            .spacing(4)
+            .width(Fill),
+            ui::action(
+                "Reveal in Finder",
+                Some(Icon::FolderSearch),
+                style::secondary,
+                Some(Message::Reveal(app.path.clone())),
+            ),
+        ]
+        .spacing(14)
+        .align_y(Center),
+    ]
+    .spacing(6)
+    .padding(20);
+
+    let mut items = column![ui::line(
+        None,
+        app.icon.as_ref(),
+        app.bytes,
+        "App bundle",
+        Message::Reveal(app.path.clone()),
+    )];
+    for leftover in &app.leftovers {
+        items = items.push(ui::separator()).push(ui::line(
+            None,
+            None,
+            leftover.bytes,
+            ui::home_relative(&leftover.path),
+            Message::Reveal(leftover.path.clone()),
+        ));
+    }
+
+    column![header, ui::separator(), scrollable(items).height(Fill)].into()
 }

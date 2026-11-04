@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use plist::Value;
 use rayon::prelude::*;
 
+use crate::platform::{self, FileIcon};
 use crate::scan;
 use crate::scan::progress::Progress;
 
@@ -14,6 +15,7 @@ const APP_DIRS_DEPTH: u8 = 2;
 pub struct InstalledApp {
     pub name: String,
     pub path: PathBuf,
+    pub icon: Option<FileIcon>,
     pub bytes: u64,
     pub leftovers: Vec<Leftover>,
     pub leftover_bytes: u64,
@@ -115,6 +117,7 @@ fn inspect(
 
     Some(InstalledApp {
         bytes: scan::disk_usage(bundle, progress).bytes,
+        icon: platform::icon(bundle),
         path: bundle.to_path_buf(),
         name,
         leftovers,

@@ -51,6 +51,10 @@ pub fn disk_usage(path: &Path, progress: &Progress) -> Usage {
 }
 
 fn walk(dir: &Dir, progress: &Progress) -> Usage {
+    if progress.is_cancelled() {
+        return Usage::default();
+    }
+
     let mut usage = Usage::default();
     let mut subdirs = Names::default();
 

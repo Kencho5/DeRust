@@ -21,16 +21,29 @@ strip = true
 
 [dependencies]
 dirs = "7.0.0"
-iced = { version = "0.14.0", features = ["canvas"] }
+iced = { version = "0.14.0", features = ["canvas", "image-without-codecs"] }
 libc = "0.2.191"
 lucide-icons = "1.67.0"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
+    "objc2-core-foundation",
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
     "NSResponder",
     "NSToolbar",
     "NSView",
     "NSWindow",
+    "NSWorkspace",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
 ] }
 plist = { version = "1.10.3", default-features = false }
 rayon = "1.12.0"

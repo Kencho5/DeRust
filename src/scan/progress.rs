@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::scan::Usage;
@@ -10,6 +10,7 @@ pub struct Progress {
     bytes: AtomicU64,
     done: AtomicU64,
     total: AtomicU64,
+    cancelled: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,11 +30,20 @@ impl Default for Progress {
             bytes: AtomicU64::new(0),
             done: AtomicU64::new(0),
             total: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
         }
     }
 }
 
 impl Progress {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
     pub fn add(&self, usage: Usage) {
         if usage.files > 0 {
             self.files.fetch_add(usage.files, Ordering::Relaxed);

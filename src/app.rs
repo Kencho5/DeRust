@@ -63,10 +63,14 @@ impl App {
                 Task::none()
             }
             Message::Drag => window::latest().and_then(window::drag),
-            Message::Overview(overview::Message::Scan(section)) => self.scan(section),
             Message::Overview(overview::Message::ScanAll) => {
                 Task::batch(Section::CLEANUP.map(|section| self.scan(section)))
             }
+            Message::Overview(overview::Message::StopAll) => Task::batch([
+                self.update(Message::Junk(junk::Message::Stop)),
+                self.update(Message::Explorer(explorer::Message::Stop)),
+                self.update(Message::Uninstaller(uninstaller::Message::Stop)),
+            ]),
             Message::Junk(message) => {
                 self.disk = Disk::root();
                 self.junk.update(message).map(Message::Junk)

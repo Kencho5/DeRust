@@ -27,10 +27,10 @@ pub const FONTS: [&[u8]; 4] = [
     include_bytes!("../../assets/fonts/SpaceGrotesk-Bold.ttf"),
 ];
 
-const BACKGROUND: Color = color!(0x121212);
-const SURFACE: Color = color!(0x171717);
-const RAISED: Color = color!(0x1c1c1c);
-const TRACK: Color = color!(0x242424);
+const BACKGROUND: Color = color!(0x141414);
+const SURFACE: Color = color!(0x1b1b1b);
+const RAISED: Color = color!(0x232323);
+pub const TRACK: Color = color!(0x2c2c2c);
 const CONTROL: Color = color!(0x4a4a4a);
 const TEXT: Color = color!(0xe3e3e3);
 pub const STRONG: Color = color!(0xf2f2f2);
@@ -79,7 +79,6 @@ pub enum Tone {
     Neutral,
     Orange,
     Blue,
-    Palette(usize),
 }
 
 impl Tone {
@@ -88,7 +87,6 @@ impl Tone {
             Tone::Neutral => MUTED,
             Tone::Orange => ACCENT,
             Tone::Blue => BLUE,
-            Tone::Palette(index) => PALETTE[index % PALETTE.len()],
         }
     }
 }
@@ -113,9 +111,15 @@ pub fn card(_theme: &Theme) -> container::Style {
     }
 }
 
-pub fn table_head(_theme: &Theme) -> container::Style {
+pub fn tip(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(RAISED.into()),
+        background: Some(TRACK.into()),
+        text_color: Some(STRONG),
+        border: Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: border(),
+        },
         ..container::Style::default()
     }
 }
@@ -125,6 +129,17 @@ pub fn segment(tone: Option<Tone>) -> impl Fn(&Theme) -> container::Style {
         background: Some(tone.map_or(TRACK, Tone::color).into()),
         border: Border {
             radius: 3.0.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+pub fn marker(color: Option<Color>) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| container::Style {
+        background: color.map(Background::Color),
+        border: Border {
+            radius: 2.0.into(),
             ..Border::default()
         },
         ..container::Style::default()
@@ -160,17 +175,6 @@ pub fn progress(_theme: &Theme) -> progress_bar::Style {
     progress_bar::Style {
         background: TRACK.into(),
         bar: ACCENT.into(),
-        border: Border {
-            radius: 2.0.into(),
-            ..Border::default()
-        },
-    }
-}
-
-pub fn share(_theme: &Theme) -> progress_bar::Style {
-    progress_bar::Style {
-        background: TRACK.into(),
-        bar: MUTED.into(),
         border: Border {
             radius: 2.0.into(),
             ..Border::default()
@@ -274,6 +278,28 @@ pub fn link_active(_theme: &Theme, _status: button::Status) -> button::Style {
     button::Style {
         text_color: STRONG,
         ..button::Style::default()
+    }
+}
+
+pub fn choice(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+
+        let (background, text_color) = match (selected, hovered) {
+            (true, _) => (Some(TRACK), STRONG),
+            (false, true) => (Some(RAISED), STRONG),
+            (false, false) => (None, TEXT),
+        };
+
+        button::Style {
+            background: background.map(Background::Color),
+            text_color,
+            border: Border {
+                radius: 6.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        }
     }
 }
 
