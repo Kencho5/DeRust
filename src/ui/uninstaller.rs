@@ -6,7 +6,8 @@ use lucide_icons::Icon;
 use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::apps::{self, InstalledApp};
-use crate::task::background;
+use crate::scan::progress::Snapshot;
+use crate::task::{self, Update, background};
 use crate::ui::{self, style};
 
 const TITLE: &str = "Uninstaller";
@@ -22,7 +23,7 @@ pub struct Uninstaller {
 enum State {
     #[default]
     Idle,
-    Scanning,
+    Scanning(Snapshot),
     Removing,
     Done {
         apps: Vec<InstalledApp>,
@@ -33,7 +34,7 @@ enum State {
 #[derive(Debug, Clone)]
 pub enum Message {
     Scan,
-    Scanned(Vec<InstalledApp>),
+    Scanning(Update<Vec<InstalledApp>>),
     Toggle(usize, bool),
     Uninstall,
     Uninstalled(Cleanup),
@@ -46,7 +47,12 @@ impl Uninstaller {
                 self.cleanup = None;
                 return self.start_scan();
             }
-            Message::Scanned(apps) => {
+            Message::Scanning(Update::Progress(snapshot)) => {
+                if let State::Scanning(current) = &mut self.state {
+                    *current = snapshot;
+                }
+            }
+            Message::Scanning(Update::Finished(apps)) => {
                 let selected = vec![false; apps.len()];
                 self.state = State::Done { apps, selected };
             }
@@ -84,8 +90,8 @@ impl Uninstaller {
     }
 
     fn start_scan(&mut self) -> Task<Message> {
-        self.state = State::Scanning;
-        Task::perform(background(apps::scan), Message::Scanned)
+        self.state = State::Scanning(Snapshot::default());
+        Task::run(task::with_progress(apps::scan), Message::Scanning)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -96,7 +102,9 @@ impl Uninstaller {
                 "Remove apps along with the files they leave behind.",
                 Some(Message::Scan),
             ),
-            State::Scanning => ui::prompt(ICON, TITLE, "Looking for apps...", None),
+            State::Scanning(snapshot) => {
+                ui::scanning(ICON, TITLE, "Looking for apps...", *snapshot)
+            }
             State::Removing => ui::prompt(ICON, TITLE, "Moving apps to Trash...", None),
             State::Done { apps, selected } => results(apps, selected, self.cleanup),
         }

@@ -5,6 +5,7 @@ use plist::Value;
 use rayon::prelude::*;
 
 use crate::scan;
+use crate::scan::progress::Progress;
 
 const APP_DIRS_DEPTH: u8 = 2;
 
@@ -27,7 +28,7 @@ impl InstalledApp {
     }
 }
 
-pub fn scan() -> Vec<InstalledApp> {
+pub fn scan(progress: &Progress) -> Vec<InstalledApp> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
@@ -40,9 +41,15 @@ pub fn scan() -> Vec<InstalledApp> {
         collect_bundles(&root, APP_DIRS_DEPTH, &mut bundles);
     }
 
+    progress.set_total(bundles.len() as u64);
+
     let mut apps: Vec<InstalledApp> = bundles
         .par_iter()
-        .filter_map(|bundle| inspect(bundle, &library, &group_containers))
+        .filter_map(|bundle| {
+            let app = inspect(bundle, &library, &group_containers, progress);
+            progress.advance();
+            app
+        })
         .collect();
 
     apps.sort_by_cached_key(|app| app.name.to_lowercase());
@@ -65,7 +72,12 @@ fn collect_bundles(dir: &Path, depth: u8, bundles: &mut Vec<PathBuf>) {
     }
 }
 
-fn inspect(bundle: &Path, library: &Path, group_containers: &[PathBuf]) -> Option<InstalledApp> {
+fn inspect(
+    bundle: &Path,
+    library: &Path,
+    group_containers: &[PathBuf],
+    progress: &Progress,
+) -> Option<InstalledApp> {
     let info = Value::from_file(bundle.join("Contents/Info.plist")).ok()?;
     let info = info.as_dictionary()?;
 
@@ -85,12 +97,12 @@ fn inspect(bundle: &Path, library: &Path, group_containers: &[PathBuf]) -> Optio
 
     let leftovers = leftovers(library, group_containers, bundle_id, &names);
     let leftover_bytes = leftovers
-        .iter()
-        .map(|path| scan::disk_usage(path).bytes)
+        .par_iter()
+        .map(|path| scan::disk_usage(path, progress).bytes)
         .sum();
 
     Some(InstalledApp {
-        bytes: scan::disk_usage(bundle).bytes,
+        bytes: scan::disk_usage(bundle, progress).bytes,
         path: bundle.to_path_buf(),
         name,
         leftovers,

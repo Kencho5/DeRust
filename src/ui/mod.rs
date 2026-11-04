@@ -5,12 +5,14 @@ pub mod uninstaller;
 
 use iced::widget::text::IntoFragment;
 use iced::widget::{
-    Column, Text, button, center, checkbox, column, container, row, rule, scrollable, space, text,
+    Column, Text, button, center, checkbox, column, container, progress_bar, row, rule, scrollable,
+    space, text,
 };
 use iced::{Center, Element, Fill, Padding, Theme};
 use lucide_icons::Icon;
 
 use crate::format;
+use crate::scan::progress::Snapshot;
 
 pub fn icon<'a>(icon: Icon) -> Text<'a> {
     text(icon.unicode()).font(style::ICONS)
@@ -36,6 +38,47 @@ pub fn prompt<'a, Message: Clone + 'a>(
             text(status).size(15).style(style::muted),
             space().height(32),
             scan,
+        ]
+        .spacing(8)
+        .align_x(Center),
+    )
+    .into()
+}
+
+pub fn scanning<'a, Message: 'a>(
+    icon: Icon,
+    title: &'static str,
+    status: &'static str,
+    snapshot: Snapshot,
+) -> Element<'a, Message> {
+    let mut stats = column![
+        text(format!("{} files", format::count(snapshot.files)))
+            .size(26)
+            .font(style::BOLD),
+        text(format::bytes(snapshot.bytes))
+            .size(15)
+            .style(style::muted),
+    ]
+    .spacing(6)
+    .align_x(Center);
+
+    if let Some(fraction) = snapshot.fraction() {
+        stats = stats.push(space().height(10)).push(
+            progress_bar(0.0..=1.0, fraction)
+                .length(320)
+                .girth(6)
+                .style(style::progress),
+        );
+    }
+
+    center(
+        column![
+            self::icon(icon).size(72).style(style::folder),
+            space().height(8),
+            text(title).size(34).font(style::BOLD),
+            text(status).size(15).style(style::muted),
+            space().height(32),
+            container(stats).center_y(140),
         ]
         .spacing(8)
         .align_x(Center),

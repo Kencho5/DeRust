@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use iced::font::Weight;
 use iced::gradient::Linear;
 use iced::theme::Palette;
-use iced::widget::{button, checkbox, container, text};
+use iced::widget::{button, checkbox, container, progress_bar, text};
 use iced::{Background, Border, Color, Degrees, Font, Gradient, Shadow, Theme, Vector, color};
 
 pub const BOLD: Font = Font {
@@ -104,6 +104,17 @@ pub fn folder(_theme: &Theme) -> text::Style {
 pub fn notice(theme: &Theme) -> text::Style {
     text::Style {
         color: Some(theme.palette().success),
+    }
+}
+
+pub fn progress(_theme: &Theme) -> progress_bar::Style {
+    progress_bar::Style {
+        background: white(0.12).into(),
+        bar: ACCENT.into(),
+        border: Border {
+            radius: 3.0.into(),
+            ..Border::default()
+        },
     }
 }
 

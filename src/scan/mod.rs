@@ -1,13 +1,19 @@
 pub mod apps;
 pub mod junk;
 pub mod large_files;
+pub mod progress;
 
-use std::fs::{self, Metadata};
+mod bulk;
+
+use std::fs;
 use std::ops::Add;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use rayon::prelude::*;
+
+use bulk::Kind;
+use progress::Progress;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Usage {
@@ -26,47 +32,39 @@ impl Add for Usage {
     }
 }
 
-pub fn allocated(metadata: &Metadata) -> u64 {
-    metadata.blocks() * 512
-}
-
-pub fn disk_usage(path: &Path) -> Usage {
+pub fn disk_usage(path: &Path, progress: &Progress) -> Usage {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => walk(path),
-        Ok(metadata) if metadata.is_file() => Usage {
-            bytes: allocated(&metadata),
-            files: 1,
-        },
+        Ok(metadata) if metadata.is_dir() => walk(path, progress),
+        Ok(metadata) if metadata.is_file() => {
+            let usage = Usage {
+                bytes: metadata.blocks() * 512,
+                files: 1,
+            };
+            progress.add(usage);
+            usage
+        }
         _ => Usage::default(),
     }
 }
 
-fn walk(dir: &Path) -> Usage {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Usage::default();
-    };
-
+fn walk(dir: &Path, progress: &Progress) -> Usage {
     let mut usage = Usage::default();
     let mut subdirs = Vec::new();
 
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            subdirs.push(entry.path());
-        } else if file_type.is_file()
-            && let Ok(metadata) = entry.metadata()
-        {
-            usage.bytes += allocated(&metadata);
+    let _ = bulk::read_dir(dir, |entry| match entry.kind {
+        Kind::Dir => subdirs.push(dir.join(entry.name)),
+        Kind::File => {
+            usage.bytes += entry.allocated;
             usage.files += 1;
         }
-    }
+        Kind::Other => {}
+    });
+
+    progress.add(usage);
 
     usage
         + subdirs
             .par_iter()
-            .map(|path| walk(path))
+            .map(|path| walk(path, progress))
             .reduce(Usage::default, Add::add)
 }

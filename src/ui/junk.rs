@@ -4,7 +4,8 @@ use lucide_icons::Icon;
 use crate::format;
 use crate::recycle::Cleanup;
 use crate::scan::junk::{self, Category, Report};
-use crate::task::background;
+use crate::scan::progress::Snapshot;
+use crate::task::{self, Update, background};
 use crate::ui::{self, style};
 
 const TITLE: &str = "System Junk";
@@ -20,7 +21,7 @@ pub struct Junk {
 enum State {
     #[default]
     Idle,
-    Scanning,
+    Scanning(Snapshot),
     Cleaning,
     Done {
         report: Report,
@@ -31,7 +32,7 @@ enum State {
 #[derive(Debug, Clone)]
 pub enum Message {
     Scan,
-    Scanned(Report),
+    Scanning(Update<Report>),
     Toggle(Category, bool),
     Clean,
     Cleaned(Cleanup),
@@ -44,7 +45,12 @@ impl Junk {
                 self.cleanup = None;
                 return self.start_scan();
             }
-            Message::Scanned(report) => {
+            Message::Scanning(Update::Progress(snapshot)) => {
+                if let State::Scanning(current) = &mut self.state {
+                    *current = snapshot;
+                }
+            }
+            Message::Scanning(Update::Finished(report)) => {
                 let selected = report
                     .entries
                     .iter()
@@ -84,8 +90,8 @@ impl Junk {
     }
 
     fn start_scan(&mut self) -> Task<Message> {
-        self.state = State::Scanning;
-        Task::perform(background(junk::scan), Message::Scanned)
+        self.state = State::Scanning(Snapshot::default());
+        Task::run(task::with_progress(junk::scan), Message::Scanning)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -96,7 +102,7 @@ impl Junk {
                 "Find caches, logs and build files you no longer need.",
                 Some(Message::Scan),
             ),
-            State::Scanning => ui::prompt(ICON, TITLE, "Scanning...", None),
+            State::Scanning(snapshot) => ui::scanning(ICON, TITLE, "Scanning...", *snapshot),
             State::Cleaning => ui::prompt(ICON, TITLE, "Moving files to Trash...", None),
             State::Done { report, selected } => results(report, selected, self.cleanup),
         }

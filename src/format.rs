@@ -18,3 +18,17 @@ pub fn bytes(bytes: u64) -> String {
 
     format!("{value:.1} {unit}")
 }
+
+pub fn count(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
+}

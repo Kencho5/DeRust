@@ -6,7 +6,8 @@ use lucide_icons::Icon;
 use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::large_files::{self, LargeFile};
-use crate::task::background;
+use crate::scan::progress::Snapshot;
+use crate::task::{self, Update, background};
 use crate::ui::{self, style};
 
 const TITLE: &str = "Large Files";
@@ -22,7 +23,7 @@ pub struct LargeFiles {
 enum State {
     #[default]
     Idle,
-    Scanning,
+    Scanning(Snapshot),
     Cleaning,
     Done {
         files: Vec<LargeFile>,
@@ -33,7 +34,7 @@ enum State {
 #[derive(Debug, Clone)]
 pub enum Message {
     Scan,
-    Scanned(Vec<LargeFile>),
+    Scanning(Update<Vec<LargeFile>>),
     Toggle(usize, bool),
     Clean,
     Cleaned(Cleanup),
@@ -46,7 +47,12 @@ impl LargeFiles {
                 self.cleanup = None;
                 return self.start_scan();
             }
-            Message::Scanned(files) => {
+            Message::Scanning(Update::Progress(snapshot)) => {
+                if let State::Scanning(current) = &mut self.state {
+                    *current = snapshot;
+                }
+            }
+            Message::Scanning(Update::Finished(files)) => {
                 let selected = vec![false; files.len()];
                 self.state = State::Done { files, selected };
             }
@@ -84,8 +90,8 @@ impl LargeFiles {
     }
 
     fn start_scan(&mut self) -> Task<Message> {
-        self.state = State::Scanning;
-        Task::perform(background(large_files::scan), Message::Scanned)
+        self.state = State::Scanning(Snapshot::default());
+        Task::run(task::with_progress(large_files::scan), Message::Scanning)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -96,7 +102,7 @@ impl LargeFiles {
                 "Find files over 100 MB in your home folder.",
                 Some(Message::Scan),
             ),
-            State::Scanning => ui::prompt(ICON, TITLE, "Scanning...", None),
+            State::Scanning(snapshot) => ui::scanning(ICON, TITLE, "Scanning...", *snapshot),
             State::Cleaning => ui::prompt(ICON, TITLE, "Moving files to Trash...", None),
             State::Done { files, selected } => results(files, selected, self.cleanup),
         }

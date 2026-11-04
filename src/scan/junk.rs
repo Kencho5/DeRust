@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use rayon::prelude::*;
 
 use crate::recycle::{self, Cleanup};
+use crate::scan::progress::Progress;
 use crate::scan::{self, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,16 +73,19 @@ pub fn clean(categories: &[Category]) -> Cleanup {
     recycle::move_to_trash(&paths)
 }
 
-pub fn scan() -> Report {
+pub fn scan(progress: &Progress) -> Report {
     let Some(home) = dirs::home_dir() else {
         return Report::default();
     };
 
+    progress.set_total(Category::ALL.len() as u64);
+
     let entries = Category::ALL
         .par_iter()
-        .map(|&category| Entry {
-            category,
-            usage: scan::disk_usage(&home.join(category.path())),
+        .map(|&category| {
+            let usage = scan::disk_usage(&home.join(category.path()), progress);
+            progress.advance();
+            Entry { category, usage }
         })
         .collect();
 

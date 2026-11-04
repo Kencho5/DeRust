@@ -1,10 +1,11 @@
 use std::cmp::Reverse;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use crate::scan;
+use crate::scan::Usage;
+use crate::scan::bulk::{self, Kind};
+use crate::scan::progress::Progress;
 
 const MIN_BYTES: u64 = 100_000_000;
 const LIMIT: usize = 500;
@@ -26,51 +27,52 @@ impl LargeFile {
     }
 }
 
-pub fn scan() -> Vec<LargeFile> {
+pub fn scan(progress: &Progress) -> Vec<LargeFile> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
 
     let skipped: Vec<PathBuf> = SKIPPED_DIRS.iter().map(|dir| home.join(dir)).collect();
 
-    let mut files = walk(&home, &skipped);
+    let mut files = walk(&home, &skipped, progress);
     files.sort_unstable_by_key(|file| Reverse(file.bytes));
     files.truncate(LIMIT);
     files
 }
 
-fn walk(dir: &Path, skipped: &[PathBuf]) -> Vec<LargeFile> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
+fn walk(dir: &Path, skipped: &[PathBuf], progress: &Progress) -> Vec<LargeFile> {
     let mut files = Vec::new();
     let mut subdirs = Vec::new();
+    let mut usage = Usage::default();
 
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            let path = entry.path();
+    let _ = bulk::read_dir(dir, |entry| match entry.kind {
+        Kind::Dir => {
+            let path = dir.join(entry.name);
             if !is_skipped(&path, skipped) {
                 subdirs.push(path);
             }
-        } else if file_type.is_file()
-            && let Ok(metadata) = entry.metadata()
-        {
-            let bytes = scan::allocated(&metadata);
-            if bytes >= MIN_BYTES {
+        }
+        Kind::File => {
+            usage.bytes += entry.allocated;
+            usage.files += 1;
+
+            if entry.allocated >= MIN_BYTES {
                 files.push(LargeFile {
-                    path: entry.path(),
-                    bytes,
+                    path: dir.join(entry.name),
+                    bytes: entry.allocated,
                 });
             }
         }
-    }
+        Kind::Other => {}
+    });
 
-    files.par_extend(subdirs.par_iter().flat_map_iter(|path| walk(path, skipped)));
+    progress.add(usage);
+
+    files.par_extend(
+        subdirs
+            .par_iter()
+            .flat_map_iter(|path| walk(path, skipped, progress)),
+    );
     files
 }
 
