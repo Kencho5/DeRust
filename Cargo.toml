@@ -23,3 +23,4 @@ strip = true
 dirs = "7.0.0"
 iced = "0.14.0"
 rayon = "1.12.0"
+trash = "5.2.9"

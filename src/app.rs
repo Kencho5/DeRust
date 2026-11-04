@@ -7,13 +7,14 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Task};
 
 use crate::format;
-use crate::junk::{self, Category, Report};
+use crate::junk::{self, Category, Cleanup, Report};
 use crate::section::Section;
 
 #[derive(Debug, Default)]
 pub struct App {
     section: Section,
     scan: Scan,
+    cleanup: Option<Cleanup>,
 }
 
 #[derive(Debug, Default)]
@@ -21,6 +22,7 @@ enum Scan {
     #[default]
     Idle,
     Running,
+    Cleaning,
     Done {
         report: Report,
         selected: Vec<Category>,
@@ -33,6 +35,8 @@ pub enum Message {
     Scan,
     Scanned(Report),
     Toggle(Category, bool),
+    Clean,
+    Cleaned(Cleanup),
 }
 
 impl App {
@@ -46,8 +50,8 @@ impl App {
         match message {
             Message::Select(section) => self.section = section,
             Message::Scan => {
-                self.scan = Scan::Running;
-                return Task::perform(background(junk::scan), Message::Scanned);
+                self.cleanup = None;
+                return self.start_scan();
             }
             Message::Scanned(report) => {
                 let selected = report
@@ -68,9 +72,29 @@ impl App {
                     }
                 }
             }
+            Message::Clean => {
+                if let Scan::Done { selected, .. } = &self.scan {
+                    let categories = selected.clone();
+                    self.scan = Scan::Cleaning;
+
+                    return Task::perform(
+                        background(move || junk::clean(&categories)),
+                        Message::Cleaned,
+                    );
+                }
+            }
+            Message::Cleaned(cleanup) => {
+                self.cleanup = Some(cleanup);
+                return self.start_scan();
+            }
         }
 
         Task::none()
+    }
+
+    fn start_scan(&mut self) -> Task<Message> {
+        self.scan = Scan::Running;
+        Task::perform(background(junk::scan), Message::Scanned)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -115,7 +139,8 @@ impl App {
                 Some(Message::Scan),
             ),
             Scan::Running => scan_prompt("Scanning...", None),
-            Scan::Done { report, selected } => results(report, selected),
+            Scan::Cleaning => scan_prompt("Moving files to Trash...", None),
+            Scan::Done { report, selected } => results(report, selected, self.cleanup),
         }
     }
 }
@@ -133,7 +158,11 @@ fn scan_prompt<'a>(status: &'static str, on_scan: Option<Message>) -> Element<'a
     .into()
 }
 
-fn results<'a>(report: &'a Report, selected: &'a [Category]) -> Element<'a, Message> {
+fn results<'a>(
+    report: &'a Report,
+    selected: &'a [Category],
+    cleanup: Option<Cleanup>,
+) -> Element<'a, Message> {
     let total = report.total();
 
     let selected_bytes: u64 = report
@@ -162,17 +191,37 @@ fn results<'a>(report: &'a Report, selected: &'a [Category]) -> Element<'a, Mess
         space().width(Fill),
         button(text("Rescan"))
             .padding([10, 24])
+            .style(button::secondary)
             .on_press(Message::Scan),
+        button(text("Clean"))
+            .padding([10, 24])
+            .on_press_maybe((!selected.is_empty()).then_some(Message::Clean)),
     ]
+    .spacing(12)
     .align_y(Center);
 
-    column![
+    let mut header = column![
         text("System Junk").size(28),
         text(format!(
             "Found {} in {} files",
             format::bytes(total.bytes),
             total.files
         )),
+    ]
+    .spacing(8);
+
+    if let Some(cleanup) = cleanup {
+        let mut notice = format!("Moved {} items to Trash", cleanup.trashed);
+
+        if cleanup.failed > 0 {
+            notice.push_str(&format!(", {} could not be moved", cleanup.failed));
+        }
+
+        header = header.push(text(notice));
+    }
+
+    column![
+        header,
         scrollable(Column::with_children(rows).spacing(12)).height(Fill),
         footer,
     ]
