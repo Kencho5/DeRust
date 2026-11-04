@@ -1,15 +1,16 @@
 use std::path::PathBuf;
 
-use iced::widget::{Column, button, checkbox, column, row, scrollable, space, text};
-use iced::{Center, Element, Fill, Task};
+use iced::{Element, Task};
+use lucide_icons::Icon;
 
 use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::large_files::{self, LargeFile};
 use crate::task::background;
-use crate::ui;
+use crate::ui::{self, style};
 
 const TITLE: &str = "Large Files";
+const ICON: Icon = Icon::FileStack;
 
 #[derive(Debug, Default)]
 pub struct LargeFiles {
@@ -90,12 +91,13 @@ impl LargeFiles {
     pub fn view(&self) -> Element<'_, Message> {
         match &self.state {
             State::Idle => ui::prompt(
+                ICON,
                 TITLE,
                 "Find files over 100 MB in your home folder.",
                 Some(Message::Scan),
             ),
-            State::Scanning => ui::prompt(TITLE, "Scanning...", None),
-            State::Cleaning => ui::prompt(TITLE, "Moving files to Trash...", None),
+            State::Scanning => ui::prompt(ICON, TITLE, "Scanning...", None),
+            State::Cleaning => ui::prompt(ICON, TITLE, "Moving files to Trash...", None),
             State::Done { files, selected } => results(files, selected, self.cleanup),
         }
     }
@@ -108,12 +110,13 @@ fn results<'a>(
 ) -> Element<'a, Message> {
     let total: u64 = files.iter().map(|file| file.bytes).sum();
 
-    let selected_bytes: u64 = files
+    let (selected_count, selected_bytes) = files
         .iter()
         .zip(selected)
         .filter(|&(_, &checked)| checked)
-        .map(|(file, _)| file.bytes)
-        .sum();
+        .fold((0, 0), |(count, bytes), (file, _)| {
+            (count + 1, bytes + file.bytes)
+        });
 
     let rows = files
         .iter()
@@ -126,51 +129,38 @@ fn results<'a>(
                 .map(|parent| parent.display().to_string())
                 .unwrap_or_default();
 
-            row![
-                checkbox(checked).on_toggle(move |checked| Message::Toggle(index, checked)),
-                column![text(file.name()), text(location).size(12)].spacing(2),
-                space().width(Fill),
-                text(format::bytes(file.bytes)),
-            ]
-            .spacing(12)
-            .align_y(Center)
-            .into()
+            ui::item(
+                checked,
+                move |checked| Message::Toggle(index, checked),
+                Icon::File,
+                file.name(),
+                location,
+                file.bytes,
+            )
         });
 
-    let footer = row![
-        text(format!("{} selected", format::bytes(selected_bytes))),
-        space().width(Fill),
-        button(text("Rescan"))
-            .padding([10, 24])
-            .style(button::secondary)
-            .on_press(Message::Scan),
-        button(text("Move to Trash"))
-            .padding([10, 24])
-            .on_press_maybe((selected_bytes > 0).then_some(Message::Clean)),
-    ]
-    .spacing(12)
-    .align_y(Center);
+    let footer = ui::footer(
+        ui::selection(selected_count, selected_bytes),
+        [
+            ui::action("Start Over", style::ghost, Some(Message::Scan)),
+            ui::action(
+                "Move to Trash",
+                style::remove,
+                (selected_count > 0).then_some(Message::Clean),
+            ),
+        ],
+    );
 
-    let mut header = column![
-        text(TITLE).size(28),
-        text(format!(
+    ui::page(
+        ICON,
+        TITLE,
+        format!(
             "Found {} files totaling {}",
             files.len(),
             format::bytes(total)
-        )),
-    ]
-    .spacing(8);
-
-    if let Some(cleanup) = cleanup {
-        header = header.push(text(cleanup.summary()));
-    }
-
-    column![
-        header,
-        scrollable(Column::with_children(rows).spacing(12)).height(Fill),
+        ),
+        cleanup.map(Cleanup::summary),
+        rows,
         footer,
-    ]
-    .spacing(16)
-    .padding(24)
-    .into()
+    )
 }

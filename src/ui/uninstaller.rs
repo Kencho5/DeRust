@@ -1,15 +1,16 @@
 use std::path::PathBuf;
 
-use iced::widget::{Column, button, checkbox, column, row, scrollable, space, text};
-use iced::{Center, Element, Fill, Task};
+use iced::{Element, Task};
+use lucide_icons::Icon;
 
 use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::apps::{self, InstalledApp};
 use crate::task::background;
-use crate::ui;
+use crate::ui::{self, style};
 
 const TITLE: &str = "Uninstaller";
+const ICON: Icon = Icon::PackageX;
 
 #[derive(Debug, Default)]
 pub struct Uninstaller {
@@ -90,12 +91,13 @@ impl Uninstaller {
     pub fn view(&self) -> Element<'_, Message> {
         match &self.state {
             State::Idle => ui::prompt(
+                ICON,
                 TITLE,
                 "Remove apps along with the files they leave behind.",
                 Some(Message::Scan),
             ),
-            State::Scanning => ui::prompt(TITLE, "Looking for apps...", None),
-            State::Removing => ui::prompt(TITLE, "Moving apps to Trash...", None),
+            State::Scanning => ui::prompt(ICON, TITLE, "Looking for apps...", None),
+            State::Removing => ui::prompt(ICON, TITLE, "Moving apps to Trash...", None),
             State::Done { apps, selected } => results(apps, selected, self.cleanup),
         }
     }
@@ -106,12 +108,13 @@ fn results<'a>(
     selected: &'a [bool],
     cleanup: Option<Cleanup>,
 ) -> Element<'a, Message> {
-    let selected_bytes: u64 = apps
+    let (selected_count, selected_bytes) = apps
         .iter()
         .zip(selected)
         .filter(|&(_, &checked)| checked)
-        .map(|(app, _)| app.total_bytes())
-        .sum();
+        .fold((0, 0), |(count, bytes), (app, _)| {
+            (count + 1, bytes + app.total_bytes())
+        });
 
     let rows = apps
         .iter()
@@ -124,48 +127,34 @@ fn results<'a>(
                 count => format!("{count} leftovers, {}", format::bytes(app.leftover_bytes)),
             };
 
-            row![
-                checkbox(checked).on_toggle(move |checked| Message::Toggle(index, checked)),
-                column![text(&app.name), text(details).size(12)].spacing(2),
-                space().width(Fill),
-                text(format::bytes(app.total_bytes())),
-            ]
-            .spacing(12)
-            .align_y(Center)
-            .into()
+            ui::item(
+                checked,
+                move |checked| Message::Toggle(index, checked),
+                Icon::AppWindow,
+                app.name.as_str(),
+                details,
+                app.total_bytes(),
+            )
         });
 
-    let footer = row![
-        text(format!("{} selected", format::bytes(selected_bytes))),
-        space().width(Fill),
-        button(text("Rescan"))
-            .padding([10, 24])
-            .style(button::secondary)
-            .on_press(Message::Scan),
-        button(text("Uninstall"))
-            .padding([10, 24])
-            .style(button::danger)
-            .on_press_maybe(selected.contains(&true).then_some(Message::Uninstall)),
-    ]
-    .spacing(12)
-    .align_y(Center);
+    let footer = ui::footer(
+        ui::selection(selected_count, selected_bytes),
+        [
+            ui::action("Start Over", style::ghost, Some(Message::Scan)),
+            ui::action(
+                "Uninstall",
+                style::remove,
+                (selected_count > 0).then_some(Message::Uninstall),
+            ),
+        ],
+    );
 
-    let mut header = column![
-        text(TITLE).size(28),
-        text(format!("{} apps installed", apps.len())),
-    ]
-    .spacing(8);
-
-    if let Some(cleanup) = cleanup {
-        header = header.push(text(cleanup.summary()));
-    }
-
-    column![
-        header,
-        scrollable(Column::with_children(rows).spacing(12)).height(Fill),
+    ui::page(
+        ICON,
+        TITLE,
+        format!("{} apps installed", apps.len()),
+        cleanup.map(Cleanup::summary),
+        rows,
         footer,
-    ]
-    .spacing(16)
-    .padding(24)
-    .into()
+    )
 }

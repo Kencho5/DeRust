@@ -1,10 +1,11 @@
-use iced::widget::{Column, button, center, container, row, text};
-use iced::{Element, Fill, Task};
+use iced::widget::{Column, button, center, column, container, row, text, tooltip};
+use iced::{Center, Element, Fill, Padding, Task, Theme};
 
 use crate::section::Section;
 use crate::ui::junk::{self, Junk};
 use crate::ui::large_files::{self, LargeFiles};
 use crate::ui::uninstaller::{self, Uninstaller};
+use crate::ui::{self, style};
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -29,6 +30,10 @@ impl App {
         Self::default()
     }
 
+    pub fn theme(&self) -> Theme {
+        style::theme()
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Select(section) => {
@@ -46,39 +51,63 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        row![self.sidebar(), self.content()].into()
+        container(row![self.sidebar(), self.main()])
+            .width(Fill)
+            .height(Fill)
+            .style(style::window)
+            .into()
     }
 
     fn sidebar(&self) -> Element<'_, Message> {
         let items = Section::ALL.into_iter().map(|section| {
-            let style = if section == self.section {
-                button::primary
-            } else {
-                button::text
-            };
+            let tile = button(center(ui::icon(section.icon()).size(24)))
+                .width(56)
+                .height(56)
+                .style(style::nav(section == self.section))
+                .on_press(Message::Select(section));
 
-            button(text(section.title()))
-                .width(Fill)
-                .padding([8, 12])
-                .style(style)
-                .on_press(Message::Select(section))
-                .into()
+            let label = container(text(section.title()).size(13))
+                .padding([6, 10])
+                .style(style::tooltip);
+
+            tooltip(tile, label, tooltip::Position::Right).into()
         });
 
-        container(Column::with_children(items).spacing(4))
-            .width(220)
+        container(Column::with_children(items).spacing(12))
+            .width(88)
             .height(Fill)
-            .padding(12)
-            .style(container::bordered_box)
+            .align_x(Center)
+            .padding(Padding {
+                top: 56.0,
+                bottom: 16.0,
+                ..Padding::ZERO
+            })
+            .style(style::sidebar)
             .into()
     }
 
-    fn content(&self) -> Element<'_, Message> {
-        match self.section {
+    fn main(&self) -> Element<'_, Message> {
+        let title = container(text(self.section.title()).size(15).style(style::subtle))
+            .width(Fill)
+            .center_x(Fill)
+            .center_y(44);
+
+        let content = match self.section {
             Section::SystemJunk => self.junk.view().map(Message::Junk),
             Section::LargeFiles => self.large_files.view().map(Message::LargeFiles),
             Section::Uninstaller => self.uninstaller.view().map(Message::Uninstaller),
-            section => center(text(section.title()).size(28)).into(),
-        }
+            section => ui::placeholder(section.icon(), section.title()),
+        };
+
+        column![
+            title,
+            container(content).padding(Padding {
+                top: 8.0,
+                right: 24.0,
+                bottom: 24.0,
+                left: 24.0,
+            })
+        ]
+        .into()
     }
 }
