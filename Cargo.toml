@@ -20,4 +20,6 @@ panic = "abort"
 strip = true
 
 [dependencies]
+dirs = "7.0.0"
 iced = "0.14.0"
+rayon = "1.12.0"
