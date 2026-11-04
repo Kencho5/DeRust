@@ -1,17 +1,18 @@
+use std::fmt;
 use std::fs;
 use std::mem;
 use std::sync::Arc;
 
 use iced::alignment::Horizontal;
 use iced::widget::text::Wrapping;
-use iced::widget::{Row, button, column, container, progress_bar, row, space, text};
+use iced::widget::{Row, button, column, container, pick_list, progress_bar, row, space, text};
 use iced::{Center, Element, Fill, Task};
 use lucide_icons::Icon;
 
 use crate::format;
 use crate::recycle::{self, Cleanup};
 use crate::scan::disk::Disk;
-use crate::scan::explorer::{self, Breakdown, FileKind, Kind, Node, Tree};
+use crate::scan::explorer::{self, FileKind, Kind, Node, Tree};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Update, background};
 use crate::ui::{self, CHECK_WIDTH, Sort, Summary, style};
@@ -48,7 +49,20 @@ struct Browser {
     sort: Sort<SortKey>,
     rows: Vec<Vec<usize>>,
     hidden: usize,
-    breakdown: Breakdown,
+    choices: Vec<Choice>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Choice {
+    filter: Option<FileKind>,
+    bytes: u64,
+}
+
+impl fmt::Display for Choice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let title = self.filter.map_or("All files", FileKind::title);
+        write!(formatter, "{title}  ·  {}", format::bytes(self.bytes))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +210,7 @@ impl Browser {
             },
             rows: Vec::new(),
             hidden: 0,
-            breakdown: Breakdown::default(),
+            choices: Vec::new(),
         };
         browser.refresh();
         browser
@@ -255,6 +269,21 @@ impl Browser {
         let current = self.current();
         let breakdown = current.breakdown();
 
+        let mut choices = vec![Choice {
+            filter: None,
+            bytes: current.bytes,
+        }];
+        choices.extend(
+            FileKind::ALL
+                .into_iter()
+                .zip(breakdown)
+                .filter(|&(kind, bytes)| bytes > 0 || self.filter == Some(kind))
+                .map(|(kind, bytes)| Choice {
+                    filter: Some(kind),
+                    bytes,
+                }),
+        );
+
         let mut rows: Vec<Vec<usize>> = match self.filter {
             None => (0..current.children.len())
                 .map(|index| {
@@ -290,7 +319,7 @@ impl Browser {
         let hidden = rows.len().saturating_sub(VISIBLE_ROWS);
         rows.truncate(VISIBLE_ROWS);
 
-        self.breakdown = breakdown;
+        self.choices = choices;
         self.rows = rows;
         self.hidden = hidden;
     }
@@ -456,38 +485,14 @@ impl Browser {
             Cleanup::summary,
         );
 
-        let header = column![self.toolbar(description), self.categories()].spacing(12);
-
         vec![ui::table(
-            container(header).padding([12, 16]).into(),
+            container(self.toolbar(description))
+                .padding([12, 16])
+                .into(),
             head.into(),
             rows,
             footer.into(),
         )]
-    }
-
-    fn categories(&self) -> Element<'_, Message> {
-        let chip = |label: String, filter: Option<FileKind>| -> Element<'_, Message> {
-            button(text(label).size(13).font(style::MEDIUM))
-                .padding([4, 10])
-                .style(style::nav(self.filter == filter))
-                .on_press(Message::Filter(filter))
-                .into()
-        };
-
-        let mut chips = vec![chip("All".to_owned(), None)];
-
-        for kind in FileKind::ALL {
-            let bytes = self.breakdown[kind as usize];
-            if bytes > 0 || self.filter == Some(kind) {
-                chips.push(chip(
-                    format!("{}  {}", kind.title(), format::bytes(bytes)),
-                    Some(kind),
-                ));
-            }
-        }
-
-        Row::with_children(chips).spacing(4).wrap().into()
     }
 
     fn toolbar(&self, description: String) -> Element<'_, Message> {
@@ -530,6 +535,18 @@ impl Browser {
             crumbs,
             space().width(Fill),
             text(description).size(14).style(style::muted),
+            space().width(8),
+            pick_list(
+                self.choices.as_slice(),
+                self.choices
+                    .iter()
+                    .find(|choice| choice.filter == self.filter),
+                |choice: Choice| Message::Filter(choice.filter),
+            )
+            .text_size(14)
+            .padding([7, 12])
+            .style(style::dropdown)
+            .menu_style(style::menu),
         ]
         .spacing(6)
         .align_y(Center)

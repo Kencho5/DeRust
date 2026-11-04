@@ -1,17 +1,19 @@
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
 use crate::scan::Usage;
-use crate::scan::bulk::{self, Kind as EntryKind};
+use crate::scan::bulk::{Dir, Kind as EntryKind, Names};
 use crate::scan::disk::Disk;
 use crate::scan::progress::Progress;
 
 const MIN_FILE_BYTES: u64 = 1_000_000;
 const SKIPPED: [&str; 5] = ["/System/Volumes", "/Volumes", "/dev", "/net", "/home"];
+const SKIP_DEPTH: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -214,21 +216,25 @@ pub fn scan(progress: &Progress) -> Tree {
         progress.set_total(disk.used());
     }
 
-    let node = walk(&root, OsStr::new("Startup Disk"), progress);
+    let name = OsStr::new("Startup Disk");
+    let node = match Dir::open(&root) {
+        Ok(dir) => walk(&dir, Some(&root), name, progress),
+        Err(_) => Node::folder(name, Vec::new()),
+    };
+
     Tree { root, node }
 }
 
-fn walk(dir: &Path, name: &OsStr, progress: &Progress) -> Node {
+fn walk(dir: &Dir, location: Option<&Path>, name: &OsStr, progress: &Progress) -> Node {
     let mut children = Vec::new();
-    let mut subdirs = Vec::new();
+    let mut subdirs = Names::default();
     let mut rest = Usage::default();
     let mut files = Usage::default();
 
-    let _ = bulk::read_dir(dir, |entry| match entry.kind {
+    let _ = dir.read(|entry| match entry.kind {
         EntryKind::Dir => {
-            let path = dir.join(entry.name);
-            if !is_skipped(&path) {
-                subdirs.push(path);
+            if !location.is_some_and(|location| is_skipped(&location.join(entry.name))) {
+                subdirs.push(entry.name);
             }
         }
         EntryKind::File => {
@@ -248,9 +254,17 @@ fn walk(dir: &Path, name: &OsStr, progress: &Progress) -> Node {
     progress.add(files);
     progress.advance_by(files.bytes);
 
-    children.par_extend(subdirs.par_iter().map(|path| {
-        let name = path.file_name().unwrap_or(path.as_os_str());
-        walk(path, name, progress)
+    let nested = location.filter(|location| location.components().count() < SKIP_DEPTH);
+
+    children.par_extend((0..subdirs.len()).into_par_iter().filter_map(|index| {
+        let child = subdirs.get(index)?;
+        let name = OsStr::from_bytes(child.to_bytes());
+        let location = nested.map(|location| location.join(name));
+
+        Some(match dir.open_at(child) {
+            Ok(child) => walk(&child, location.as_deref(), name, progress),
+            Err(_) => Node::folder(name, Vec::new()),
+        })
     }));
 
     if rest.files > 0 {
@@ -263,15 +277,21 @@ fn walk(dir: &Path, name: &OsStr, progress: &Progress) -> Node {
         });
     }
 
-    children.sort_unstable_by_key(|child| Reverse(child.bytes));
-    children.shrink_to_fit();
+    Node::folder(name, children)
+}
 
-    Node {
-        name: name.into(),
-        kind: Kind::Folder,
-        bytes: children.iter().map(|child| child.bytes).sum(),
-        items: children.iter().map(|child| child.items).sum(),
-        children,
+impl Node {
+    fn folder(name: &OsStr, mut children: Vec<Node>) -> Node {
+        children.sort_unstable_by_key(|child| Reverse(child.bytes));
+        children.shrink_to_fit();
+
+        Node {
+            name: name.into(),
+            kind: Kind::Folder,
+            bytes: children.iter().map(|child| child.bytes).sum(),
+            items: children.iter().map(|child| child.items).sum(),
+            children,
+        }
     }
 }
 

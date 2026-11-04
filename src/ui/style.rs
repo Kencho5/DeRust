@@ -2,8 +2,9 @@ use std::sync::LazyLock;
 
 use iced::font::Weight;
 use iced::theme::Palette;
-use iced::widget::{button, checkbox, container, progress_bar, rule, text};
-use iced::{Background, Border, Color, Font, Theme, color};
+use iced::overlay::menu;
+use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, text};
+use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, color};
 
 pub const FONT: Font = Font::with_name("Space Grotesk");
 
@@ -211,6 +212,44 @@ pub fn link(_theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
         text_color,
         ..button::Style::default()
+    }
+}
+
+pub fn dropdown(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let background = match status {
+        pick_list::Status::Active => SURFACE,
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => RAISED,
+    };
+
+    pick_list::Style {
+        text_color: TEXT,
+        placeholder_color: MUTED,
+        handle_color: MUTED,
+        background: background.into(),
+        border: Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: border(),
+        },
+    }
+}
+
+pub fn menu(_theme: &Theme) -> menu::Style {
+    menu::Style {
+        background: RAISED.into(),
+        border: Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: border(),
+        },
+        text_color: TEXT,
+        selected_text_color: STRONG,
+        selected_background: TRACK.into(),
+        shadow: Shadow {
+            color: Color::BLACK.scale_alpha(0.4),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 24.0,
+        },
     }
 }
 

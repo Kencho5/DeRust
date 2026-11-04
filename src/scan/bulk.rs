@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::ffi::{CString, OsStr};
+use std::ffi::{CStr, CString, OsStr};
 use std::io;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -8,10 +8,11 @@ use std::path::Path;
 
 use libc::{
     ATTR_BIT_MAP_COUNT, ATTR_CMN_NAME, ATTR_CMN_OBJTYPE, ATTR_CMN_RETURNED_ATTRS,
-    ATTR_FILE_ALLOCSIZE, attribute_set_t, attrlist, attrreference_t,
+    ATTR_FILE_ALLOCSIZE, attribute_set_t, attrlist, attrreference_t, c_int,
 };
 
 const BUFFER_SIZE: usize = 128 * 1024;
+const OPEN_FLAGS: c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
 const VREG: u32 = 1;
 const VDIR: u32 = 2;
 
@@ -33,20 +34,67 @@ pub struct Entry<'a> {
     pub allocated: u64,
 }
 
-pub fn read_dir(dir: &Path, mut visit: impl FnMut(Entry<'_>)) -> io::Result<()> {
-    let path = CString::new(dir.as_os_str().as_bytes())?;
+#[derive(Debug)]
+pub struct Dir {
+    fd: OwnedFd,
+}
 
-    let fd = unsafe {
-        libc::open(
-            path.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
+#[derive(Debug, Default)]
+pub struct Names {
+    bytes: Vec<u8>,
+    ends: Vec<usize>,
+}
+
+impl Names {
+    pub fn push(&mut self, name: &OsStr) {
+        self.bytes.extend_from_slice(name.as_bytes());
+        self.bytes.push(0);
+        self.ends.push(self.bytes.len());
     }
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
+    pub fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&CStr> {
+        let end = *self.ends.get(index)?;
+        let start = index.checked_sub(1).map_or(0, |previous| self.ends[previous]);
+        CStr::from_bytes_with_nul(self.bytes.get(start..end)?).ok()
+    }
+}
+
+impl Dir {
+    pub fn open(path: &Path) -> io::Result<Dir> {
+        let path = CString::new(path.as_os_str().as_bytes())?;
+        Dir::from_raw(unsafe { libc::open(path.as_ptr(), OPEN_FLAGS) })
+    }
+
+    pub fn open_at(&self, name: &CStr) -> io::Result<Dir> {
+        Dir::from_raw(unsafe {
+            libc::openat(
+                self.fd.as_raw_fd(),
+                name.as_ptr(),
+                OPEN_FLAGS | libc::O_NOFOLLOW,
+            )
+        })
+    }
+
+    fn from_raw(fd: c_int) -> io::Result<Dir> {
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Dir {
+            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+        })
+    }
+
+    pub fn read(&self, visit: impl FnMut(Entry<'_>)) -> io::Result<()> {
+        list(&self.fd, visit)
+    }
+}
+
+fn list(fd: &OwnedFd, mut visit: impl FnMut(Entry<'_>)) -> io::Result<()> {
     let mut attributes = attrlist {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -160,7 +208,7 @@ mod tests {
         std::os::unix::fs::symlink("small.txt", dir.join("link")).unwrap();
 
         let mut found = HashMap::new();
-        read_dir(&dir, |entry| {
+        Dir::open(&dir).unwrap().read(|entry| {
             found.insert(entry.name.to_owned(), (entry.kind, entry.allocated));
         })
         .unwrap();

@@ -14,6 +14,9 @@ use app::App;
 use ui::style;
 
 fn main() -> iced::Result {
+    platform::raise_open_file_limit();
+    platform::configure_threads();
+
     style::FONTS
         .into_iter()
         .fold(

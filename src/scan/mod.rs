@@ -13,7 +13,7 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-use bulk::Kind;
+use bulk::{Dir, Kind, Names};
 use progress::Progress;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,7 +35,9 @@ impl Add for Usage {
 
 pub fn disk_usage(path: &Path, progress: &Progress) -> Usage {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => walk(path, progress),
+        Ok(metadata) if metadata.is_dir() => Dir::open(path)
+            .map(|dir| walk(&dir, progress))
+            .unwrap_or_default(),
         Ok(metadata) if metadata.is_file() => {
             let usage = Usage {
                 bytes: metadata.blocks() * 512,
@@ -48,12 +50,12 @@ pub fn disk_usage(path: &Path, progress: &Progress) -> Usage {
     }
 }
 
-fn walk(dir: &Path, progress: &Progress) -> Usage {
+fn walk(dir: &Dir, progress: &Progress) -> Usage {
     let mut usage = Usage::default();
-    let mut subdirs = Vec::new();
+    let mut subdirs = Names::default();
 
-    let _ = bulk::read_dir(dir, |entry| match entry.kind {
-        Kind::Dir => subdirs.push(dir.join(entry.name)),
+    let _ = dir.read(|entry| match entry.kind {
+        Kind::Dir => subdirs.push(entry.name),
         Kind::File => {
             usage.bytes += entry.allocated;
             usage.files += 1;
@@ -64,8 +66,9 @@ fn walk(dir: &Path, progress: &Progress) -> Usage {
     progress.add(usage);
 
     usage
-        + subdirs
-            .par_iter()
-            .map(|path| walk(path, progress))
+        + (0..subdirs.len())
+            .into_par_iter()
+            .filter_map(|index| dir.open_at(subdirs.get(index)?).ok())
+            .map(|child| walk(&child, progress))
             .reduce(Usage::default, Add::add)
 }
