@@ -4,12 +4,14 @@ use iced::{Element, Fill, Task};
 use crate::section::Section;
 use crate::ui::junk::{self, Junk};
 use crate::ui::large_files::{self, LargeFiles};
+use crate::ui::uninstaller::{self, Uninstaller};
 
 #[derive(Debug, Default)]
 pub struct App {
     section: Section,
     junk: Junk,
     large_files: LargeFiles,
+    uninstaller: Uninstaller,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +19,7 @@ pub enum Message {
     Select(Section),
     Junk(junk::Message),
     LargeFiles(large_files::Message),
+    Uninstaller(uninstaller::Message),
 }
 
 impl App {
@@ -35,6 +38,9 @@ impl App {
             Message::Junk(message) => self.junk.update(message).map(Message::Junk),
             Message::LargeFiles(message) => {
                 self.large_files.update(message).map(Message::LargeFiles)
+            }
+            Message::Uninstaller(message) => {
+                self.uninstaller.update(message).map(Message::Uninstaller)
             }
         }
     }
@@ -71,6 +77,7 @@ impl App {
         match self.section {
             Section::SystemJunk => self.junk.view().map(Message::Junk),
             Section::LargeFiles => self.large_files.view().map(Message::LargeFiles),
+            Section::Uninstaller => self.uninstaller.view().map(Message::Uninstaller),
             section => center(text(section.title()).size(28)).into(),
         }
     }

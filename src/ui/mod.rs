@@ -1,5 +1,6 @@
 pub mod junk;
 pub mod large_files;
+pub mod uninstaller;
 
 use iced::widget::{button, center, column, text};
 use iced::{Center, Element};

@@ -1,11 +1,11 @@
 use std::fs;
 use std::ops::Add;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rayon::prelude::*;
 
 use crate::recycle::{self, Cleanup};
+use crate::scan::{self, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -34,23 +34,6 @@ impl Category {
             Category::UserCaches => "Library/Caches",
             Category::UserLogs => "Library/Logs",
             Category::XcodeDerivedData => "Library/Developer/Xcode/DerivedData",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Usage {
-    pub bytes: u64,
-    pub files: u64,
-}
-
-impl Add for Usage {
-    type Output = Usage;
-
-    fn add(self, other: Usage) -> Usage {
-        Usage {
-            bytes: self.bytes + other.bytes,
-            files: self.files + other.files,
         }
     }
 }
@@ -98,39 +81,9 @@ pub fn scan() -> Report {
         .par_iter()
         .map(|&category| Entry {
             category,
-            usage: walk(&home.join(category.path())),
+            usage: scan::disk_usage(&home.join(category.path())),
         })
         .collect();
 
     Report { entries }
-}
-
-fn walk(dir: &Path) -> Usage {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Usage::default();
-    };
-
-    let mut usage = Usage::default();
-    let mut subdirs = Vec::new();
-
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            subdirs.push(entry.path());
-        } else if file_type.is_file()
-            && let Ok(metadata) = entry.metadata()
-        {
-            usage.bytes += metadata.blocks() * 512;
-            usage.files += 1;
-        }
-    }
-
-    usage
-        + subdirs
-            .par_iter()
-            .map(|path| walk(path))
-            .reduce(Usage::default, Add::add)
 }

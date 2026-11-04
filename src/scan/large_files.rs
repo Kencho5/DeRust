@@ -1,9 +1,10 @@
 use std::cmp::Reverse;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
+
+use crate::scan;
 
 const MIN_BYTES: u64 = 100_000_000;
 const LIMIT: usize = 500;
@@ -59,7 +60,7 @@ fn walk(dir: &Path, skipped: &[PathBuf]) -> Vec<LargeFile> {
         } else if file_type.is_file()
             && let Ok(metadata) = entry.metadata()
         {
-            let bytes = metadata.blocks() * 512;
+            let bytes = scan::allocated(&metadata);
             if bytes >= MIN_BYTES {
                 files.push(LargeFile {
                     path: entry.path(),
@@ -69,15 +70,7 @@ fn walk(dir: &Path, skipped: &[PathBuf]) -> Vec<LargeFile> {
         }
     }
 
-    let nested = subdirs
-        .par_iter()
-        .map(|path| walk(path, skipped))
-        .reduce(Vec::new, |mut all, mut found| {
-            all.append(&mut found);
-            all
-        });
-
-    files.extend(nested);
+    files.par_extend(subdirs.par_iter().flat_map_iter(|path| walk(path, skipped)));
     files
 }
 
