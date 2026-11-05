@@ -33,6 +33,16 @@ To build a universal `derust.app` with a `.dmg`, run `./scripts/bundle.sh`.
 
 Grant Full Disk Access in System Settings for complete results.
 
+## Why
+
+This is something I built for myself to replace CleanMyMac, which is paid. I'm sharing it in case it's useful to anyone else.
+
+## AI Usage
+
+- **UI**: copied from my startup. A designer and I made it.
+- **Scanning and categorization**: copied one to one from another project of mine that I wrote years ago. I reviewed it manually and changed the removal logic so files go to the Trash instead of being permanently deleted.
+- **Iced UI implementation**: written with AI. This is the only part I haven't fully reviewed. It's a thin layer and can't cause catastrophic bugs.
+
 ## License
 
 [MIT](LICENSE). Space Grotesk is licensed under the [SIL Open Font License](assets/fonts/OFL.txt).
