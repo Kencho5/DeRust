@@ -40,12 +40,23 @@ const ROW_ICON: f32 = 28.0;
 const SIZE_WIDTH: f32 = 80.0;
 const CHEVRON_WIDTH: f32 = 16.0;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Explorer {
     state: State,
     disk: Option<Disk>,
     cleanup: Option<Cleanup>,
     performance: Option<Snapshot>,
+}
+
+impl Default for Explorer {
+    fn default() -> Self {
+        Explorer {
+            state: State::default(),
+            disk: Disk::root(),
+            cleanup: None,
+            performance: None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -207,17 +218,7 @@ impl Explorer {
         });
 
         let body = match &self.state {
-            State::Idle => vec![ui::empty(
-                Icon::HardDrive,
-                "No scan yet",
-                "Map every folder on your startup disk, largest first.",
-                ui::action(
-                    "Scan disk",
-                    Some(Icon::Play),
-                    style::primary,
-                    Some(Message::Scan),
-                ),
-            )],
+            State::Idle => idle(self.disk),
             State::Scanning(running) => vec![ui::progress(
                 "Scanning your disk",
                 running.snapshot,
@@ -236,6 +237,125 @@ impl Explorer {
 
         ui::page(TITLE, SUBTITLE, actions, body)
     }
+}
+
+fn idle<'a>(disk: Option<Disk>) -> Vec<Element<'a, Message>> {
+    let toolbar = row![
+        ui::icon_button(Icon::ChevronLeft, None),
+        ui::icon_button(Icon::ChevronRight, None),
+        space().width(8),
+        text("Startup Disk")
+            .size(14)
+            .font(style::MEDIUM)
+            .style(style::strong),
+    ]
+    .spacing(8)
+    .align_y(Center);
+
+    let message = column![
+        text("Nothing mapped yet")
+            .size(15)
+            .font(style::SEMIBOLD)
+            .style(style::strong),
+        text("Scan to see every folder on this disk, largest first.")
+            .size(13)
+            .style(style::muted),
+        space().height(10),
+        ui::action(
+            "Scan disk",
+            Some(Icon::Play),
+            style::primary,
+            Some(Message::Scan),
+        ),
+    ]
+    .spacing(4)
+    .align_x(Center);
+
+    let list = column![
+        container(toolbar).padding([12, 20]),
+        ui::separator(),
+        container(message).center(Fill),
+    ]
+    .width(FillPortion(3));
+
+    let mut breakdown = Column::new()
+        .spacing(12)
+        .padding(16)
+        .width(FillPortion(2))
+        .height(Fill);
+    let mut footer = row![].spacing(12).align_y(Center);
+
+    if let Some(disk) = disk {
+        let parts = [
+            ("Used", disk.used(), style::MUTED),
+            ("Available", disk.available, style::TRACK),
+        ];
+
+        let legend = Column::with_children(parts.map(|(name, bytes, color)| {
+            row![
+                container(space())
+                    .width(8)
+                    .height(8)
+                    .style(style::marker(Some(color))),
+                text(name).size(13).width(Fill),
+                text(format::bytes(bytes)).size(13).style(style::muted),
+            ]
+            .spacing(10)
+            .align_y(Center)
+            .padding([7, 10])
+            .into()
+        }))
+        .spacing(2);
+
+        let chart = canvas(Donut {
+            slices: vec![Slice {
+                indices: None,
+                name: Cow::Borrowed("Used"),
+                bytes: disk.used(),
+                kind: None,
+                color: style::MUTED,
+            }],
+            total: disk.total,
+            title: Cow::Borrowed("Used"),
+            hovered: None,
+        })
+        .width(Fill)
+        .height(CHART_HEIGHT);
+
+        breakdown = breakdown.push(chart).push(legend);
+        footer = footer
+            .push(
+                progress_bar(0.0..=1.0, disk.fraction())
+                    .length(120)
+                    .girth(4)
+                    .style(style::progress),
+            )
+            .push(
+                text(format!(
+                    "{} of {} used",
+                    format::bytes(disk.used()),
+                    format::bytes(disk.total)
+                ))
+                .size(13)
+                .style(style::muted),
+            );
+    }
+
+    let footer = footer
+        .push(space().width(Fill))
+        .push(text("Not scanned").size(14).style(style::muted));
+
+    vec![
+        container(column![
+            row![list, rule::vertical(1).style(style::separator), breakdown].height(Fill),
+            ui::separator(),
+            container(footer).padding([12, 20]),
+        ])
+        .height(Fill)
+        .clip(true)
+        .style(style::card)
+        .into(),
+    ]
 }
 
 impl Browser {

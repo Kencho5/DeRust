@@ -5,7 +5,7 @@ use iced::{Center, Element, Fill, Task};
 use lucide_icons::Icon;
 
 use crate::recycle::Cleanup;
-use crate::scan::junk::{self, Entry, Report};
+use crate::scan::junk::{self, Category, Entry, Report};
 use crate::scan::progress::Snapshot;
 use crate::task::{self, Running, Update, background};
 use crate::ui::style;
@@ -155,17 +155,7 @@ impl Junk {
         });
 
         let body = match &self.state {
-            State::Idle => vec![ui::empty(
-                Icon::Brush,
-                "No scan yet",
-                "Look through caches, logs and Xcode build data.",
-                ui::action(
-                    "Start scan",
-                    Some(Icon::Play),
-                    style::primary,
-                    Some(Message::Scan),
-                ),
-            )],
+            State::Idle => vec![intro(self.focus)],
             State::Scanning(running) => vec![ui::progress(
                 "Scanning junk locations",
                 running.snapshot,
@@ -184,6 +174,63 @@ impl Junk {
 
         ui::page(TITLE, SUBTITLE, actions, body)
     }
+}
+
+fn intro<'a>(focus: usize) -> Element<'a, Message> {
+    let mut sidebar = vec![container(ui::label("Categories")).padding([12, 12]).into()];
+
+    sidebar.extend(
+        Category::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, category)| {
+                ui::choice(
+                    None,
+                    category.title(),
+                    "—".to_owned(),
+                    index == focus,
+                    Message::Focus(index),
+                )
+            }),
+    );
+
+    let category = Category::ALL[focus.min(Category::ALL.len() - 1)];
+
+    let header = column![
+        text(category.title())
+            .size(16)
+            .font(style::MEDIUM)
+            .style(style::strong),
+        text(category.description()).size(13).style(style::muted),
+        text(category.location()).size(12).style(style::muted),
+    ]
+    .spacing(6)
+    .padding(20);
+
+    let message = column![
+        text("Not scanned yet")
+            .size(15)
+            .font(style::SEMIBOLD)
+            .style(style::strong),
+        text("Sizes show up here after a scan. Nothing is removed until you review it.")
+            .size(13)
+            .style(style::muted),
+        space().height(10),
+        ui::action(
+            "Start scan",
+            Some(Icon::Play),
+            style::primary,
+            Some(Message::Scan),
+        ),
+    ]
+    .spacing(4)
+    .align_x(Center);
+
+    let content = column![header, ui::separator(), container(message).center(Fill)].into();
+
+    let clean = ui::action("Clean up", Some(Icon::Trash2), style::primary, None);
+
+    ui::split(sidebar, content, "Not scanned".to_owned(), clean)
 }
 
 fn results<'a>(

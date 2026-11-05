@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use iced::widget::{Column, Row, button, column, row, scrollable, space, text};
+use iced::widget::{Column, Row, button, column, container, row, scrollable, space, text};
 use iced::{Center, Element, Fill, Shrink, Task};
 use lucide_icons::Icon;
 
@@ -194,17 +194,7 @@ impl Uninstaller {
         });
 
         let body = match &self.state {
-            State::Idle => vec![ui::empty(
-                Icon::Package,
-                "No scan yet",
-                "Find installed apps and everything they store in your Library.",
-                ui::action(
-                    "Find apps",
-                    Some(Icon::Play),
-                    style::primary,
-                    Some(Message::Scan),
-                ),
-            )],
+            State::Idle => vec![intro(self.filter)],
             State::Scanning(running) => vec![ui::progress(
                 "Looking for apps",
                 running.snapshot,
@@ -223,6 +213,60 @@ impl Uninstaller {
 
         ui::page(TITLE, SUBTITLE, actions, body)
     }
+}
+
+fn intro<'a>(current: Filter) -> Element<'a, Message> {
+    let sidebar = [Filter::All, Filter::Leftovers, Filter::Selected].map(|filter| {
+        ui::choice(
+            None,
+            filter.title(),
+            "—".to_owned(),
+            current == filter,
+            Message::Filter(filter),
+        )
+    });
+
+    let toolbar = row![
+        text("No apps yet").size(13).style(style::muted),
+        space().width(Fill),
+        text("Sort by").size(12).style(style::muted),
+        row![ui::label("Name"), ui::label("Size"), ui::label("Leftovers")].spacing(14),
+    ]
+    .spacing(12)
+    .align_y(Center)
+    .padding([12, 20]);
+
+    let message = column![
+        text("Not scanned yet")
+            .size(15)
+            .font(style::SEMIBOLD)
+            .style(style::strong),
+        text(
+            "Finds apps in /Applications and ~/Applications, plus what they leave in your Library."
+        )
+        .size(13)
+        .style(style::muted),
+        space().height(10),
+        ui::action(
+            "Find apps",
+            Some(Icon::Play),
+            style::primary,
+            Some(Message::Scan),
+        ),
+    ]
+    .spacing(4)
+    .align_x(Center);
+
+    let content = column![toolbar, ui::separator(), container(message).center(Fill)].into();
+
+    let uninstall = ui::action("Uninstall", Some(Icon::Trash2), style::danger, None);
+
+    ui::split(
+        std::iter::once(ui::group("Show")).chain(sidebar),
+        content,
+        "Not scanned".to_owned(),
+        uninstall,
+    )
 }
 
 fn results<'a>(
